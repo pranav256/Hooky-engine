@@ -3,14 +3,11 @@ from __future__ import annotations
 
 import os
 
-from ..config import AUDIO_NORMALIZATION
-
 # --- Whisper (speech-to-text) ---------------------------------------------
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "tiny")       # tiny|base|small
-WHISPER_COMPUTE = os.environ.get("WHISPER_COMPUTE", "int8")   # int8 = fast on old CPUs
+WHISPER_COMPUTE = os.environ.get("WHISPER_COMPUTE", "int8").strip().lower() or "int8"   # int8 = fast on old CPUs
 
 # --- ffmpeg CPU/RAM friendly settings ---------------------------------------
-X264_PRESET = os.environ.get("X264_PRESET", "medium")  # override per machine/profile
 NGROUPS = 48            # cap GOP memory usage
 MAX_MUX_QUEUE = "4M"    # keep muxing RAM small
 try:
@@ -35,15 +32,15 @@ if QUALITY in {"highest", "maximum", "max"}:
     X264_CRF = "15"
     # At a fixed CRF, slow mainly saves a little file size at a large time
     # cost. Medium keeps nearly the same visual quality and is much faster.
-    X264_PRESET = os.environ.get("X264_PRESET", "medium")
+    X264_PRESET = os.environ.get("X264_PRESET", "medium").strip().lower()
     AUDIO_BITRATE = "256k"
 elif QUALITY == "high":
     X264_CRF = "17"
-    X264_PRESET = os.environ.get("X264_PRESET", "medium")
+    X264_PRESET = os.environ.get("X264_PRESET", "medium").strip().lower()
     AUDIO_BITRATE = "192k"
 else:
     X264_CRF = "21"
-    X264_PRESET = os.environ.get("X264_PRESET", "veryfast")
+    X264_PRESET = os.environ.get("X264_PRESET", "veryfast").strip().lower()
     AUDIO_BITRATE = "128k"
 
 

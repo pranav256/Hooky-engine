@@ -4,33 +4,29 @@ import os
 import re
 import sys
 import json
-import time
-import shutil
 import secrets
 import hmac
 import asyncio
-import subprocess
+import math
+import tempfile
 from pathlib import Path
 from typing import Any
+from contextlib import asynccontextmanager
+from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
-from hooky.config import CHANNELS_FILE, LINKS_FILE, OUTPUT_DIR, PROJECT_ROOT, ENV_FILE
+from hooky.config import PROJECT_ROOT, ENV_FILE, DOTENV_KEYS
+from hooky import __version__
+from hooky.dotenv import parse_dotenv, dump_dotenv, validate_settings, SECRET_KEYS, MASK
+from hooky.setup.storage import write_env, SetupStorageError
+from hooky.web.jobs import JobManager, prune_cache
 from hooky.doctor import dependency_checks
-from hooky.core.subtitles import STYLES, build_ass
-from hooky.core.source_text import parse_caption_file, caption_words
-from hooky.core.cutter import cut_clip
-from hooky.core.utils import format_timestamp, validate_video_url
-from hooky.web.analyzer import (
-    ANALYSIS_JOBS,
-    run_analysis_pipeline,
-    extract_youtube_id,
-    get_video_metadata,
-    download_captions,
-    extract_ranked_scenes,
-)
+from hooky.core.subtitles import STYLES
+from hooky.core.utils import validate_video_url
 
 def _load_or_create_web_token() -> str:
     env_token = os.environ.get("HOOKY_WEB_TOKEN", "").strip()
@@ -67,7 +63,16 @@ def get_web_token() -> str:
     return _WEB_TOKEN
 
 
-app = FastAPI(title="Hooky Web Studio & Control Portal", version="2.4.0")
+@asynccontextmanager
+async def lifespan(app):
+    manager = _job_manager()
+    try:
+        yield
+    finally:
+        await manager.shutdown()
+
+
+app = FastAPI(title="Hooky Web Studio & Control Portal", version=__version__, lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -83,9 +88,7 @@ async def security_middleware(request: Request, call_next):
     """Enforce loopback Host header to prevent DNS rebinding, and authenticate API calls."""
     # 1. Host header validation
     host_header = request.headers.get("host", "")
-    host = host_header.split(":")[0].strip("[]").lower()
-    allowed_hosts = {"127.0.0.1", "localhost", "::1", "testserver"}
-    if host and host not in allowed_hosts:
+    if not re.fullmatch(r"(?:127\.0\.0\.1|localhost|\[::1\]|testserver)(?::\d+)?", host_header, re.IGNORECASE):
         return JSONResponse(
             status_code=403,
             content={"detail": f"Forbidden: Host header '{host_header}' is not allowed"},
@@ -108,23 +111,142 @@ async def security_middleware(request: Request, call_next):
 
 STATIC_DIR = Path(__file__).parent / "static"
 INDEX_HTML = STATIC_DIR / "index.html"
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 _JOBS: dict[str, dict[str, Any]] = {}
+_MANAGER: JobManager | None = None
+_STABLE_SETTINGS = {key: os.environ.get(key, "") for key in ("STATE_DIR", "HOOKY_WEB_TOKEN", "IG_SESSION_FILE")}
+
+
+def _job_manager() -> JobManager:
+    global _MANAGER
+    state = Path(_STABLE_SETTINGS["STATE_DIR"] or PROJECT_ROOT / ".hooky-state")
+    state = state if state.is_absolute() else PROJECT_ROOT / state
+    directory = state / "web_jobs"
+    if _MANAGER is None or _MANAGER.directory != directory:
+        _JOBS.clear()
+        _MANAGER = JobManager(directory, _JOBS)
+        roots = {_configured_path("OUTPUT_DIR")} | {Path(job["output_root"]) for job in _MANAGER.jobs.values() if job.get("output_root")}
+        for root in roots:
+            try:
+                prune_cache(root / "web_cache")
+            except OSError:
+                pass
+    return _MANAGER
+
+
+def _runtime_settings() -> dict[str, str]:
+    values = {key: value for key, value in os.environ.items() if key not in DOTENV_KEYS}
+    if ENV_FILE.exists():
+        try:
+            saved = parse_dotenv(ENV_FILE.read_text(encoding="utf-8"))
+            validate_settings(saved)
+            values.update(saved)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"Saved settings need repair: {exc}") from exc
+    return values
+
+
+def _configured_path(key: str) -> Path:
+    raw = _runtime_settings().get(key, "").strip()
+    if not raw:
+        return PROJECT_ROOT / {"OUTPUT_DIR": "output", "CHANNELS_FILE": "channels.txt", "LINKS_FILE": "links.txt"}[key]
+    path = Path(raw)
+    return path if path.is_absolute() else PROJECT_ROOT / path
+
+
+def _job_response(job: dict) -> dict:
+    manager = _job_manager()
+    safe = manager._redact(job, manager.secrets.get(job["id"], ()))
+    result = {key: value for key, value in safe.items() if key != "output_root"}
+    if job.get("output_file"):
+        result["output_url"] = f"/api/outputs/{quote(job['output_file'])}?job_id={job['id']}"
+    return result
+
+
+async def _launch(kind: str, payload: dict) -> dict:
+    try:
+        environment = _runtime_settings()
+        # Preserve test/deployment configured paths even when no file override exists.
+        for key in ("OUTPUT_DIR", "CHANNELS_FILE", "LINKS_FILE"):
+            environment[key] = str(_configured_path(key))
+        job = await _job_manager().start(kind, payload, environment, PROJECT_ROOT)
+    except ValueError as exc:
+        raise HTTPException(status_code=429 if "Two jobs" in str(exc) else 400, detail=str(exc)) from exc
+    return {"job_id": job["id"], "status": "started"}
+
+
+async def _request_object(request: Request) -> dict[str, Any]:
+    body = await request.body()
+    if len(body) > 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Request body exceeds 1 MiB.")
+    try:
+        data = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="Request body must be valid JSON.")
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+    return data
+
+
+async def _source_lines(request: Request, field: str) -> list[str]:
+    data = await _request_object(request)
+    lines = data.get(field)
+    if not isinstance(lines, list) or any(
+        not isinstance(line, str) or any(char in line for char in "\r\n\0")
+        for line in lines
+    ):
+        raise HTTPException(status_code=400, detail=f"'{field}' must be a list of single-line strings.")
+    return [line.strip() for line in lines if line.strip()]
+
+
+def _write_source_lines(path: Path, lines: list[str]) -> None:
+    """Replace a source list only after the complete new file is on disk."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as output:
+            output.write("\n".join(lines) + ("\n" if lines else ""))
+            output.flush()
+            os.fsync(output.fileno())
+        Path(name).replace(path)
+    finally:
+        Path(name).unlink(missing_ok=True)
+
+
+def _video_url(data: dict[str, Any]) -> str:
+    url = data.get("url")
+    if not isinstance(url, str) or any(char in url for char in "\r\n\0") or not validate_video_url(url.strip()):
+        raise HTTPException(status_code=400, detail="Enter a valid http(s) video URL.")
+    return url.strip()
+
+
+def _request_text(data: dict[str, Any], field: str, default: str = "") -> str:
+    value = data.get(field, default)
+    if not isinstance(value, str) or "\0" in value:
+        raise HTTPException(status_code=400, detail=f"'{field}' must be a string without null characters.")
+    return value.strip()
+
+
+def _render_options(data: dict[str, Any]) -> tuple[str, str]:
+    style = _request_text(data, "style", (_runtime_settings().get("SUB_STYLE") or "").strip() or "gold").lower()
+    framing = _request_text(data, "framing", "center").lower()
+    if style not in STYLES:
+        raise HTTPException(status_code=400, detail="Unknown subtitle style.")
+    if framing not in {"center", "fit"}:
+        raise HTTPException(status_code=400, detail="Framing must be 'center' or 'fit'.")
+    return style, framing
 
 
 @app.get("/api/doctor")
 async def get_doctor_status():
     """Return diagnostic checks from Hooky's doctor module."""
-    raw_checks = dependency_checks()
+    raw_checks = await asyncio.to_thread(dependency_checks, _runtime_settings(), PROJECT_ROOT)
     checks = [
         {"name": c.name, "ok": c.ok, "detail": c.detail, "required": c.required}
         for c in raw_checks
     ]
-    gpu_type = "CPU (Multi-threaded)"
-    if shutil.which("nvidia-smi"):
-        gpu_type = "NVIDIA NVENC (CUDA Accelerated)"
-    elif sys.platform == "darwin":
-        gpu_type = "Apple Silicon VideoToolbox (Metal)"
+    gpu_type = "CPU (H.264 / libx264)"
 
     return {
         "status": "online",
@@ -138,11 +260,12 @@ async def get_doctor_status():
 @app.get("/api/channels")
 async def get_channels():
     """Return active lines from channels.txt."""
-    if not CHANNELS_FILE.exists():
-        return {"channels": []}
+    path = _configured_path("CHANNELS_FILE")
+    if not path.exists():
+        return {"channels": [], "count": 0}
     lines = [
         line.strip()
-        for line in CHANNELS_FILE.read_text(encoding="utf-8").splitlines()
+        for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     ]
     return {"channels": lines, "count": len(lines)}
@@ -151,21 +274,20 @@ async def get_channels():
 @app.post("/api/channels")
 async def save_channels(request: Request):
     """Save updated channels list to channels.txt."""
-    data = await request.json()
-    new_channels = data.get("channels", [])
-    content = "\n".join(new_channels) + "\n"
-    CHANNELS_FILE.write_text(content, encoding="utf-8")
+    new_channels = await _source_lines(request, "channels")
+    _write_source_lines(_configured_path("CHANNELS_FILE"), new_channels)
     return {"status": "saved", "count": len(new_channels)}
 
 
 @app.get("/api/links")
 async def get_links():
     """Return active lines from links.txt."""
-    if not LINKS_FILE.exists():
-        return {"links": []}
+    path = _configured_path("LINKS_FILE")
+    if not path.exists():
+        return {"links": [], "count": 0}
     lines = [
         line.strip()
-        for line in LINKS_FILE.read_text(encoding="utf-8").splitlines()
+        for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     ]
     return {"links": lines, "count": len(lines)}
@@ -174,783 +296,231 @@ async def get_links():
 @app.post("/api/links")
 async def save_links(request: Request):
     """Save updated links list to links.txt."""
-    data = await request.json()
-    new_links = data.get("links", [])
-    content = "\n".join(new_links) + "\n"
-    LINKS_FILE.write_text(content, encoding="utf-8")
+    new_links = await _source_lines(request, "links")
+    _write_source_lines(_configured_path("LINKS_FILE"), new_links)
     return {"status": "saved", "count": len(new_links)}
+
+
+def _sanitized_settings(values: dict[str, str]) -> dict:
+    sanitized = {key: MASK if key in SECRET_KEYS and value else value for key, value in values.items()}
+    return {"raw": dump_dotenv(sanitized), "values": sanitized}
+
+
+def _settings_document(data: dict, current: dict | None = None) -> tuple[dict[str, str], list[str]]:
+    existing = current if current is not None else parse_dotenv(ENV_FILE.read_text(encoding="utf-8")) if ENV_FILE.exists() else {}
+    if "draft" in data:
+        operations = data["draft"]
+        if not isinstance(operations, list) or not 1 <= len(operations) <= 100 or any(not isinstance(op, dict) or "draft" in op for op in operations):
+            raise ValueError("draft must contain 1 to 100 raw/form edits; save or discard before adding more.")
+        if set(data) != {"draft"}:
+            raise ValueError("Provide draft edits separately from raw or values.")
+        submitted = set()
+        values = existing
+        for operation in operations:
+            values, keys = _settings_document(operation, values)
+            submitted.update(keys)
+        return values, sorted(submitted)
+    if not {"raw", "values"}.intersection(data):
+        raise ValueError("Provide raw or values.")
+    submitted = {}
+    if "raw" in data:
+        if not isinstance(data["raw"], str):
+            raise ValueError("raw must be a string.")
+        base = parse_dotenv(data["raw"])
+        submitted.update(base)
+    else:
+        base = existing.copy()
+    prior = {key: base.get(key, existing.get(key, "")) if base.get(key) != MASK else existing.get(key, "") for key in SECRET_KEYS}
+    values = base.copy()
+    if "values" in data:
+        if not isinstance(data["values"], dict):
+            raise ValueError("values must be a JSON object.")
+        validate_settings(data["values"])
+        values.update(data["values"])
+        submitted.update(data["values"])
+    for key in SECRET_KEYS:
+        if values.get(key) == MASK:
+            values[key] = prior.get(key, "")
+    validate_settings(values)
+    return values, sorted(key for key in SECRET_KEYS if key in submitted and submitted[key] != MASK)
 
 
 @app.get("/api/env")
 async def get_env_config():
-    """Return sanitized content and parsed key-value pairs from .env with sensitive credentials masked."""
-    if not ENV_FILE.exists():
-        return {"raw": "", "values": {}}
-    raw = ENV_FILE.read_text(encoding="utf-8")
-    values = {}
-    masked_raw_lines = []
-    sensitive_keys = {"IG_PASSWORD", "GEMINI_API_KEY"}
-    for line in raw.splitlines():
-        stripped = line.strip()
-        if stripped and not stripped.startswith("#") and "=" in stripped:
-            k, _, v = stripped.partition("=")
-            k = k.strip()
-            v = v.strip().strip("'\"")
-            if k in sensitive_keys and v:
-                values[k] = "••••••••"
-                masked_raw_lines.append(f"{k}=••••••••")
-                continue
-            values[k] = v
-        masked_raw_lines.append(line)
-    return {"raw": "\n".join(masked_raw_lines), "values": values}
+    try:
+        values = parse_dotenv(ENV_FILE.read_text(encoding="utf-8")) if ENV_FILE.exists() else {}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _sanitized_settings(values)
+
+
+@app.post("/api/env/preview")
+async def preview_env_config(request: Request):
+    try:
+        values, submitted = _settings_document(await _request_object(request))
+        return {**_sanitized_settings(values), "submitted_secret_keys": submitted}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/env")
 async def save_env_config(request: Request):
-    """Save updated .env configuration from either raw text or key-value dict."""
-    ct = request.headers.get("content-type", "").lower()
-    if "application/json" not in ct:
+    if "application/json" not in request.headers.get("content-type", "").lower():
         raise HTTPException(status_code=415, detail="Content-Type must be application/json")
-
-    data = await request.json()
-    existing_raw = ENV_FILE.read_text(encoding="utf-8") if ENV_FILE.exists() else ""
-    existing_secrets = {}
-    for line in existing_raw.splitlines():
-        s = line.strip()
-        if s and not s.startswith("#") and "=" in s:
-            k, _, v = s.partition("=")
-            existing_secrets[k.strip()] = v.strip().strip("'\"")
-
-    key_pattern = re.compile(r"^[A-Z0-9_]{2,64}$")
-    sensitive_keys = {"IG_PASSWORD", "GEMINI_API_KEY"}
-
-    if "raw" in data and isinstance(data["raw"], str):
-        lines = []
-        for line in data["raw"].splitlines():
-            s = line.strip()
-            if s and not s.startswith("#") and "=" in s:
-                k, _, v = s.partition("=")
-                k = k.strip()
-                v = v.strip().strip("'\"")
-                if not key_pattern.match(k):
-                    continue
-                if k in sensitive_keys and v.startswith("••") and k in existing_secrets:
-                    v_orig = existing_secrets[k]
-                    lines.append(f'{k}="{v_orig}"' if " " in v_orig else f"{k}={v_orig}")
-                    continue
-            lines.append(line)
-        content = "\n".join(lines).rstrip() + "\n"
-        ENV_FILE.write_text(content, encoding="utf-8")
-    elif "values" in data and isinstance(data["values"], dict):
-        updated = {}
-        for k, v in data["values"].items():
-            k_clean = str(k).strip()
-            if not key_pattern.match(k_clean):
-                continue
-            v_clean = str(v).strip()
-            if k_clean in sensitive_keys and v_clean.startswith("••"):
-                if k_clean in existing_secrets:
-                    updated[k_clean] = existing_secrets[k_clean]
-            else:
-                updated[k_clean] = v_clean
-
-        raw = existing_raw
-        lines = raw.splitlines()
-        existing = set()
-        new_lines = []
-        for line in lines:
-            stripped = line.strip()
-            if stripped and not stripped.startswith("#") and "=" in stripped:
-                k, _, _ = stripped.partition("=")
-                k = k.strip()
-                existing.add(k)
-                if k in updated:
-                    v = str(updated[k]).strip()
-                    if " " in v or "\\" in v:
-                        v = f'"{v}"'
-                    new_lines.append(f"{k}={v}")
-                    continue
-            new_lines.append(line)
-        for k, v in updated.items():
-            if k not in existing:
-                v_str = f'"{v}"' if " " in str(v) else str(v)
-                new_lines.append(f"{k}={v_str}")
-        content = "\n".join(new_lines) + "\n"
-        ENV_FILE.write_text(content, encoding="utf-8")
-    else:
-        raise HTTPException(status_code=400, detail="Invalid request payload; provide 'raw' or 'values'")
-
-    # Reload into os.environ
-    for raw_line in ENV_FILE.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            k, _, v = line.partition("=")
-            k = k.strip()
-            v = v.strip().strip("'\"")
-            if k:
-                os.environ[k] = v
-
-    return {"status": "saved", "message": ".env configuration saved successfully"}
+    try:
+        values, submitted = _settings_document(await _request_object(request))
+        inherited = {key: os.environ.get(key, "") if key not in DOTENV_KEYS else "" for key in _STABLE_SETTINGS}
+        effective = {**inherited, **values}
+        restart = [key for key in _STABLE_SETTINGS if effective.get(key, "") != _STABLE_SETTINGS[key]]
+        write_env(values, ENV_FILE)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except SetupStorageError as exc:
+        raise HTTPException(status_code=500, detail="Could not save settings; previous settings were kept. Check file permissions and retry.") from exc
+    return {"status": "saved", "message": "Saved for new jobs; running jobs keep their settings.",
+            **_sanitized_settings(values), "restart_required": restart, "submitted_secret_keys": submitted}
 
 
-def sanitize_folder_name(name: str, fallback: str = "video_reels") -> str:
-    """Sanitize video title to create clean, human-readable directory name."""
-    if not name:
-        return fallback
-    # Remove invalid Windows/POSIX filename characters: \ / : * ? " < > |
-    cleaned = re.sub(r'[\\/*?:"<>|]', '', str(name)).strip()
-    # Normalize whitespaces
-    cleaned = re.sub(r'\s+', ' ', cleaned).strip('. ')
-    if not cleaned:
-        return fallback
-    return cleaned[:60].rstrip('. ')
+def _output_roots() -> dict[Path, str | None]:
+    roots = {_configured_path("OUTPUT_DIR").resolve(): None}
+    for job in _job_manager().jobs.values():
+        if job.get("output_root") and job.get("output_file"):
+            roots.setdefault(Path(job["output_root"]).resolve(), job["id"])
+    return roots
+
+
+def _public_output(path: Path, root: Path) -> bool:
+    try:
+        relative = path.relative_to(root)
+        return (path.suffix.lower() == ".mp4" and path.resolve().is_relative_to(root.resolve())
+                and not any(part in {"web_cache", "downloads", ".checkpoints", ".cache"} or part.startswith(".") for part in relative.parts)
+                and not path.name.startswith("snippet_") and not path.name.endswith(".tmp.mp4")
+                and path.is_file() and path.stat().st_size > 1000)
+    except (OSError, ValueError):
+        return False
 
 
 @app.get("/api/outputs")
 async def list_outputs():
-    """List rendered MP4 video files grouped by source video folder, strictly excluding internal caches/downloads."""
-    if not OUTPUT_DIR.exists():
-        return {"folders": [], "files": [], "count": 0}
-
-    manifest_cache = {}
-
-    def resolve_folder_title(folder_dir: Path) -> str:
-        if folder_dir in manifest_cache:
-            return manifest_cache[folder_dir]
-        manifest_p = folder_dir / "manifest.json"
-        if manifest_p.exists():
-            try:
-                import json
-                m_data = json.loads(manifest_p.read_text(encoding="utf-8"))
-                source = m_data.get("source", "")
-                if source:
-                    src_json = Path(source).with_suffix(".json")
-                    if src_json.exists():
-                        j_data = json.loads(src_json.read_text(encoding="utf-8"))
-                        if j_data.get("title"):
-                            title_val = str(j_data["title"]).strip()
-                            manifest_cache[folder_dir] = title_val
-                            return title_val
-            except Exception:
-                pass
-        manifest_cache[folder_dir] = folder_dir.name
-        return folder_dir.name
-
-    folders_dict: dict[str, dict] = {}
-    all_files = []
-
-    for p in sorted(OUTPUT_DIR.glob("**/*.mp4"), key=lambda x: x.stat().st_mtime, reverse=True):
-        # Exclude temporary, cache, raw downloads, checkpoints, and hidden files
-        rel_parts = p.relative_to(OUTPUT_DIR).parts
-        if any(part in ("web_cache", "downloads", ".checkpoints", ".cache") or part.startswith(".") for part in rel_parts):
-            continue
-        if p.name.startswith(".") or p.name.startswith("snippet_") or p.name.endswith(".tmp.mp4") or p.name.endswith(".part"):
-            continue
-
-        stat = p.stat()
-        if stat.st_size <= 1000:
-            continue
-
-        rel_path = str(p.relative_to(OUTPUT_DIR)).replace("\\", "/")
-
-        if len(rel_parts) > 1:
-            raw_folder_dir = OUTPUT_DIR / rel_parts[0]
-            display_folder = resolve_folder_title(raw_folder_dir)
-            folder_key = rel_parts[0]
-        else:
-            display_folder = "Standalone Reels"
-            folder_key = "standalone"
-
-        item = {
-            "name": p.name,
-            "folder": display_folder,
-            "folder_key": folder_key,
-            "rel_path": rel_path,
-            "size_mb": round(stat.st_size / (1024 * 1024), 2),
-            "mtime": stat.st_mtime,
-            "url": f"/api/outputs/{rel_path}",
-        }
-        all_files.append(item)
-        if display_folder not in folders_dict:
-            folders_dict[display_folder] = {
-                "name": display_folder,
-                "folder_key": folder_key,
-                "files": [],
-                "latest_mtime": stat.st_mtime,
-            }
-        folders_dict[display_folder]["files"].append(item)
-        if stat.st_mtime > folders_dict[display_folder]["latest_mtime"]:
-            folders_dict[display_folder]["latest_mtime"] = stat.st_mtime
-
-    folders_list = sorted(folders_dict.values(), key=lambda f: f["latest_mtime"], reverse=True)
-    for f in folders_list:
-        f["count"] = len(f["files"])
-
-    return {
-        "folders": folders_list,
-        "files": all_files,
-        "count": len(all_files),
-    }
+    roots = _output_roots()
+    def scan():
+        files = []
+        folders = {}
+        for root, job_id in roots.items():
+            for path in root.glob("**/*.mp4"):
+                if not _public_output(path, root):
+                    continue
+                relative = path.relative_to(root).as_posix()
+                stat = path.stat()
+                folder = path.parent.name if path.parent != root else "Standalone Reels"
+                item = {"name": path.name, "folder": folder, "folder_key": folder, "rel_path": relative,
+                        "size_mb": round(stat.st_size / (1024 * 1024), 2), "mtime": stat.st_mtime,
+                        "url": f"/api/outputs/{quote(relative)}" + (f"?job_id={job_id}" if job_id else "")}
+                files.append(item)
+                entry = folders.setdefault((root, folder), {"name": folder, "folder_key": folder, "files": [], "latest_mtime": 0})
+                entry["files"].append(item)
+                entry["latest_mtime"] = max(entry["latest_mtime"], stat.st_mtime)
+        files.sort(key=lambda item: item["mtime"], reverse=True)
+        grouped = sorted(folders.values(), key=lambda item: item["latest_mtime"], reverse=True)
+        for folder in grouped:
+            folder["count"] = len(folder["files"])
+        return {"files": files, "folders": grouped, "count": len(files)}
+    return await asyncio.to_thread(scan)
 
 
 @app.get("/api/outputs/{filepath:path}")
-async def serve_output_file(filepath: str):
-    """Stream an output video file from output directory or subfolder."""
-    # 1. Direct path lookup relative to OUTPUT_DIR
-    try:
-        clean = Path(filepath).as_posix().lstrip("/")
-        candidate = (OUTPUT_DIR / clean).resolve()
-        if candidate.is_relative_to(OUTPUT_DIR.resolve()) and candidate.is_file():
-            return FileResponse(candidate, media_type="video/mp4")
-    except Exception:
-        pass
-
-    # 2. Recursive basename search as fallback
-    name = Path(filepath).name
-    for p in OUTPUT_DIR.glob(f"**/{name}"):
-        if p.is_file() and p.resolve().is_relative_to(OUTPUT_DIR.resolve()):
-            return FileResponse(p, media_type="video/mp4")
-
+async def serve_output_file(filepath: str, job_id: str | None = None):
+    if job_id:
+        job = _job_manager().jobs.get(job_id)
+        if not job or not job.get("output_root"):
+            raise HTTPException(status_code=404, detail="Output job not found")
+        root = Path(job["output_root"]).resolve()
+    else:
+        root = _configured_path("OUTPUT_DIR").resolve()
+    path = root / filepath
+    if _public_output(path, root):
+        return FileResponse(path, media_type="video/mp4")
     raise HTTPException(status_code=404, detail="File not found")
 
 
 @app.post("/api/analyze/start")
 async def start_analyze_job(request: Request):
-    """Start asynchronous video hook analysis job with real-time progress tracking."""
-    data = await request.json()
-    url = data.get("url", "").strip()
-    if not url:
-        raise HTTPException(status_code=400, detail="Missing URL")
-
-    job_id = f"analyze_{int(time.time() * 1000)}"
-    ANALYSIS_JOBS[job_id] = {
-        "id": job_id,
-        "url": url,
-        "status": "running",
-        "progress": 5,
-        "step_number": 1,
-        "step": "Initializing video stream probe...",
-        "logs": [f"[{time.strftime('%H:%M:%S')}] Started analysis job for {url}"],
-        "created_at": time.time(),
-        "result": None,
-    }
-
-    asyncio.create_task(run_analysis_pipeline(url, job_id))
-    return {"job_id": job_id, "status": "started"}
+    data = await _request_object(request)
+    return await _launch("analyze", {"url": _video_url(data)})
 
 
 @app.get("/api/analyze/status/{job_id}")
 async def get_analyze_status(job_id: str):
-    """Get status, progress, and logs for an ongoing or completed analysis job."""
-    if job_id not in ANALYSIS_JOBS:
-        raise HTTPException(status_code=404, detail="Analysis job not found")
-    return ANALYSIS_JOBS[job_id]
+    return await get_job_status(job_id)
 
 
 @app.post("/api/analyze")
 async def analyze_video(request: Request):
-    """Synchronous or direct video hook analysis endpoint."""
-    data = await request.json()
-    url = data.get("url", "").strip()
-    if not url:
-        raise HTTPException(status_code=400, detail="Missing URL")
-
-    job_id = f"analyze_sync_{int(time.time())}"
-    ANALYSIS_JOBS[job_id] = {
-        "id": job_id,
-        "url": url,
-        "status": "running",
-        "progress": 10,
-        "step_number": 1,
-        "step": "Analyzing video hooks...",
-        "logs": [],
-        "created_at": time.time(),
-        "result": None,
-    }
-    return await run_analysis_pipeline(url, job_id)
+    data = await _request_object(request)
+    launched = await _launch("analyze", {"url": _video_url(data)})
+    job_id = launched["job_id"]
+    manager = _job_manager()
+    task = manager.tasks.get(job_id)
+    if task:
+        await asyncio.shield(task)
+    job = manager.jobs[job_id]
+    safe = _job_response(job)
+    return safe.get("result") or safe
 
 
 @app.post("/api/jobs/render_clip")
 @app.post("/api/jobs/render")
 @app.post("/api/render")
 async def render_single_clip(request: Request):
-    """Render a selected hook into a 1080x1920 vertical Reel with burned-in subtitles."""
-    data = await request.json()
-    url = data.get("url", "").strip()
-    if not url or not validate_video_url(url):
-        raise HTTPException(status_code=400, detail="Invalid or missing video URL; must be an http(s) URL.")
-
+    data = await _request_object(request)
+    url = _video_url(data)
     try:
-        start = float(data.get("start", 0))
-        end = float(data.get("end", 0))
-    except (ValueError, TypeError):
-        raise HTTPException(status_code=400, detail="Start and end timestamps must be numeric.")
-
-    if start < 0 or end <= start:
-        raise HTTPException(status_code=400, detail="Invalid clip timestamps: start must be >= 0 and end must be > start.")
-
-    style = data.get("style", "gold").strip().lower()
-    framing = data.get("framing", "center").strip().lower()
-    title = data.get("title", "Hooky Reel").strip()
-    video_title = (data.get("video_title") or data.get("source_title") or "").strip()
-    if not video_title:
-        try:
-            meta = get_video_metadata(url)
-            video_title = meta.get("title", "").strip()
-        except Exception:
-            pass
-
-    job_id = f"render_{int(time.time())}"
-    _JOBS[job_id] = {
-        "id": job_id,
-        "type": "render_clip",
-        "status": "running",
-        "title": title,
-        "progress": 10,
-        "step": "Preparing video slice...",
-        "logs": [f"[{time.strftime('%H:%M:%S')}] Requested render: '{title}' [{format_timestamp(start)} - {format_timestamp(end)}]"],
-        "created_at": time.time(),
-        "output_file": None,
-    }
-
-    async def _render_task():
-        cache_dir = OUTPUT_DIR / "web_cache"
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        
-        def log(msg: str):
-            print(msg)
-            _JOBS[job_id]["logs"].append(f"[{time.strftime('%H:%M:%S')}] {msg}")
-
-        try:
-            # 1. Download specific video section
-            _JOBS[job_id]["progress"] = 25
-            _JOBS[job_id]["step"] = f"Downloading footage segment [{format_timestamp(start)} - {format_timestamp(end)}] via yt-dlp..."
-            log(f"[downloader] Fetching {end - start:.1f}s section from {url}...")
-
-            clean_name = re.sub(r"[^\w\-]", "_", title.lower())[:32]
-            snippet_path = cache_dir / f"snippet_{clean_name}_{int(start)}_{int(end)}.mp4"
-
-            if not (snippet_path.exists() and snippet_path.stat().st_size > 10000):
-                cmd = [
-                    sys.executable, "-m", "yt_dlp",
-                    "--download-sections", f"*{int(start)}-{int(end + 1.5)}",
-                    "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
-                    "--merge-output-format", "mp4",
-                    "-o", str(snippet_path),
-                    "--",
-                    url,
-                ]
-                proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-                s_out, s_err = await proc.communicate()
-                if proc.returncode != 0:
-                    err_msg = s_err.decode("utf-8", errors="replace").strip()
-                    log(f"[downloader] yt-dlp failure: {err_msg}")
-                    raise RuntimeError(f"yt-dlp error (code {proc.returncode}): {err_msg[:200]}")
-                log(f"[downloader] Download complete: {snippet_path.name}")
-            else:
-                log(f"[downloader] Reusing cached segment: {snippet_path.name}")
-
-            # 2. Build ASS Subtitles keyed strictly by video ID
-            _JOBS[job_id]["progress"] = 55
-            _JOBS[job_id]["step"] = f"Generating word-aligned ASS subtitles (Preset: {style})..."
-            log(f"[subtitles] Synthesizing {style} subtitle cues...")
-
-            vid_id = extract_youtube_id(url)
-            vtt_file = None
-            if vid_id:
-                candidate = cache_dir / f"yt_{vid_id}.vtt"
-                if candidate.exists() and candidate.stat().st_size > 0:
-                    vtt_file = candidate
-
-            cues = []
-            if vtt_file:
-                cues = parse_caption_file(vtt_file)
-            
-            hook_cues = [c for c in cues if c["start"] >= start - 1.0 and c["end"] <= end + 1.5]
-            # Convert to 0-relative
-            rel_cues = []
-            for c in hook_cues:
-                rel_cues.append({
-                    "start": max(0.0, c["start"] - start),
-                    "end": max(0.1, c["end"] - start),
-                    "text": c["text"]
-                })
-            
-            clip_len = max(1.0, end - start)
-            ass_path = None
-            if rel_cues:
-                words = caption_words(rel_cues)
-                if words:
-                    ass_content = build_ass(words, clip_start=0.0, clip_end=clip_len, style_name=style)
-                    ass_path = cache_dir / f"subs_{clean_name}_{style}.ass"
-                    ass_path.write_text(ass_content, encoding="utf-8")
-                    log(f"[subtitles] Saved ASS style file: {ass_path.name}")
-                else:
-                    log("[subtitles] No words in cues; skipping subtitles")
-            else:
-                log("[subtitles] No timed captions found for segment; rendering clean video without subtitles")
-
-            # 3. Cut & Encode 1080x1920 Vertical Video into dedicated folder named after video title
-            _JOBS[job_id]["progress"] = 75
-            _JOBS[job_id]["step"] = "FFmpeg hardware encoding 1080x1920 vertical Reel..."
-            log(f"[ffmpeg] Executing vertical filter: framing='{framing}', style='{style}'...")
-
-            clean_folder = sanitize_folder_name(video_title, fallback=clean_name or f"video_{vid_id or 'reels'}")
-            target_folder = OUTPUT_DIR / clean_folder
-            target_folder.mkdir(parents=True, exist_ok=True)
-
-            out_filename = f"reel_{clean_name}_{int(time.time())}.mp4"
-            final_out_path = target_folder / out_filename
-            rel_out_path = f"{clean_folder}/{out_filename}"
-
-            # Run cut_clip in thread
-            await asyncio.to_thread(
-                cut_clip,
-                video_path=snippet_path,
-                start=0.0,
-                end=clip_len,
-                out_path=final_out_path,
-                ass_path=ass_path,
-                framing=framing,
-            )
-
-            if final_out_path.exists() and final_out_path.stat().st_size > 1000:
-                _JOBS[job_id]["progress"] = 100
-                _JOBS[job_id]["step"] = "Render completed successfully! Ready in Output Gallery."
-                _JOBS[job_id]["status"] = "completed"
-                _JOBS[job_id]["output_file"] = rel_out_path
-                _JOBS[job_id]["output_url"] = f"/api/outputs/{rel_out_path}?token={_WEB_TOKEN}"
-                log(f"[pipeline] Successfully rendered 9:16 Reel into '{clean_folder}': {out_filename} ({final_out_path.stat().st_size / (1024*1024):.2f} MB)")
-                # Remove intermediate landscape snippet to prevent duplicate footage on disk
-                try:
-                    if snippet_path.exists():
-                        snippet_path.unlink()
-                except OSError:
-                    pass
-            else:
-                raise RuntimeError("FFmpeg render failed: output file not created.")
-
-        except Exception as exc:
-            log(f"[renderer] Error during render: {exc}")
-            _JOBS[job_id]["status"] = "failed"
-            _JOBS[job_id]["error"] = str(exc)
-
-    asyncio.create_task(_render_task())
-    return {"job_id": job_id, "status": "started"}
+        if isinstance(data.get("start"), bool) or isinstance(data.get("end"), bool):
+            raise ValueError
+        start, end = float(data.get("start", 0)), float(data.get("end", 0))
+    except (ValueError, TypeError, OverflowError):
+        raise HTTPException(status_code=400, detail="Start and end timestamps must be numeric.") from None
+    if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end <= start:
+        raise HTTPException(status_code=400, detail="Start must be >= 0 and end must be greater than start.")
+    style, framing = _render_options(data)
+    title = _request_text(data, "title", "Hooky Reel")
+    video_title, source_title = _request_text(data, "video_title"), _request_text(data, "source_title")
+    return await _launch("render", {"url": url, "start": start, "end": end, "style": style, "framing": framing,
+                                    "title": title, "video_title": video_title or source_title})
 
 
 @app.post("/api/jobs/make")
 @app.post("/api/make")
 async def launch_make_job(request: Request):
-    """Launch full autonomous Hooky pipeline run."""
-    data = await request.json()
-    target = data.get("target", "").strip()
-    if target.startswith("-"):
-        raise HTTPException(status_code=400, detail="Invalid target: cannot start with option flag '-'")
-    if target and not (target.startswith("http://") or target.startswith("https://") or target.startswith("@") or Path(target).exists()):
+    data = await _request_object(request)
+    target = _request_text(data, "target")
+    if "url" in data:
+        _video_url(data)
+    if target.startswith("-") or any(char in target for char in "\r\n") or (target and not (validate_video_url(target) or target.startswith("@") or Path(target).is_file())):
         raise HTTPException(status_code=400, detail="Target must be a valid URL, @channel, or local file.")
+    style, framing = _render_options(data)
+    return await _launch("make", {"target": target, "style": style, "framing": framing})
 
-    style = data.get("style", "gold")
-    framing = data.get("framing", "center")
 
-    job_id = f"make_{int(time.time())}"
-    cmd_args = [sys.executable, "-u", "-m", "hooky", "make"]
-    if target:
-        state_dir = Path(os.environ.get("STATE_DIR") or PROJECT_ROOT / ".hooky-state")
-        state_dir.mkdir(parents=True, exist_ok=True)
-        job_links_file = state_dir / f"job_{job_id}_links.txt"
-        job_links_file.write_text(f"{target}\n", encoding="utf-8")
-        cmd_args.extend(["--links", str(job_links_file)])
-    else:
-        cmd_args.append("--links")
-
-    if style:
-        cmd_args.extend(["--style", style])
-    if framing:
-        cmd_args.extend(["--framing", framing])
-    cmd_args.extend(["--no-post", "--no-upload"])
-
-    _JOBS[job_id] = {
-        "id": job_id,
-        "type": "make",
-        "status": "running",
-        "command": " ".join(cmd_args[1:]),
-        "target": target or "channels.txt queue",
-        "progress": 5,
-        "step": "Initializing Hooky pipeline...",
-        "logs": [f"[{time.strftime('%H:%M:%S')}] $ {' '.join(cmd_args)}"],
-        "created_at": time.time(),
-    }
-
-    async def _run_process():
-        try:
-            sub_env = {**os.environ, "PYTHONUNBUFFERED": "1"}
-            process = await asyncio.create_subprocess_exec(
-                *cmd_args,
-                cwd=str(PROJECT_ROOT),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                env=sub_env,
-            )
-
-            while True:
-                line = await process.stdout.readline()
-                if not line:
-                    break
-                decoded = line.decode("utf-8", errors="replace").rstrip()
-                if decoded:
-                    _JOBS[job_id]["logs"].append(decoded)
-                    lower = decoded.lower()
-                    if "download" in lower:
-                        _JOBS[job_id]["progress"] = 25
-                        _JOBS[job_id]["step"] = "Downloading source video & audio..."
-                    elif "gemini" in lower or "highlight" in lower:
-                        _JOBS[job_id]["progress"] = 50
-                        _JOBS[job_id]["step"] = "Gemini analyzing narrative hook points..."
-                    elif "whisper" in lower or "transcrib" in lower:
-                        _JOBS[job_id]["progress"] = 70
-                        _JOBS[job_id]["step"] = "Faster-whisper word-level audio alignment..."
-                    elif "cut" in lower or "ffmpeg" in lower or "render" in lower:
-                        _JOBS[job_id]["progress"] = 85
-                        _JOBS[job_id]["step"] = "FFmpeg hardware encoding 1080x1920 vertical reel..."
-                    elif "complete" in lower or "done" in lower:
-                        _JOBS[job_id]["progress"] = 100
-                        _JOBS[job_id]["step"] = "Pipeline completed successfully!"
-
-            exit_code = await process.wait()
-            _JOBS[job_id]["exit_code"] = exit_code
-            _JOBS[job_id]["status"] = "completed" if exit_code == 0 else "failed"
-            _JOBS[job_id]["progress"] = 100 if exit_code == 0 else _JOBS[job_id]["progress"]
-            if exit_code == 0:
-                _JOBS[job_id]["step"] = "Pipeline completed successfully!"
-            else:
-                _JOBS[job_id]["step"] = f"Pipeline finished with exit code {exit_code}"
-        except Exception as exc:
-            _JOBS[job_id]["status"] = "failed"
-            _JOBS[job_id]["error"] = str(exc)
-
-    async def _run_selective_make_pipeline(url: str, style_name: str, framing_mode: str):
-        cache_dir = OUTPUT_DIR / "web_cache"
-        cache_dir.mkdir(parents=True, exist_ok=True)
-
-        def log(msg: str):
-            print(msg)
-            _JOBS[job_id]["logs"].append(f"[{time.strftime('%H:%M:%S')}] {msg}")
-
-        try:
-            # 1. Fetch metadata and VTT captions without downloading the video
-            _JOBS[job_id]["progress"] = 10
-            _JOBS[job_id]["step"] = "Connecting to stream & fetching timed captions (no video download)..."
-            log(f"[pipeline] Fast Selective Pipeline initiated for URL: {url}")
-            log(f"[pipeline] Step 1: Fetching video metadata and caption track...")
-
-            meta = get_video_metadata(url)
-            title = meta.get("title", "Video")
-            duration = float(meta.get("duration", 0.0))
-            vid_id = meta.get("id") or extract_youtube_id(url)
-            dur_label = format_timestamp(duration) if duration > 0 else "Unknown"
-            log(f"[meta] Title: '{title}' | Duration: {dur_label} | ID: {vid_id or 'none'}")
-
-            sub_prefix = cache_dir / (f"yt_{vid_id}" if vid_id else f"sub_{int(time.time())}")
-            vtt_path = await download_captions(url, sub_prefix, log)
-
-            cues = []
-            if vtt_path and vtt_path.exists():
-                cues = parse_caption_file(vtt_path)
-                log(f"[captions] Parsed {len(cues)} timed dialogue cues from {vtt_path.name}")
-            else:
-                log("[captions] Notice: Video has no pre-existing YouTube caption tracks.")
-
-            if not cues:
-                # Fast Audio-Only Whisper Fallback:
-                # Download ONLY the lightweight audio track (~20 MB instead of a 5 GB video!)
-                _JOBS[job_id]["progress"] = 15
-                _JOBS[job_id]["step"] = "Downloading lightweight audio stream for faster-whisper transcription..."
-                log(f"[pipeline] Downloading audio-only stream (~20-30 MB, no heavy video download)...")
-
-                audio_path = cache_dir / f"audio_{vid_id}.m4a"
-                if not (audio_path.exists() and audio_path.stat().st_size > 10000):
-                    dl_cmd = [
-                        sys.executable, "-m", "yt_dlp",
-                        "-f", "ba/bestaudio",
-                        "-o", str(audio_path),
-                        "--",
-                        url,
-                    ]
-                    dl_proc = await asyncio.create_subprocess_exec(
-                        *dl_cmd,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE
-                    )
-                    await dl_proc.communicate()
-
-                if audio_path.exists() and audio_path.stat().st_size > 10000:
-                    _JOBS[job_id]["progress"] = 20
-                    _JOBS[job_id]["step"] = "Transcribing audio with faster-whisper..."
-                    log(f"[whisper] Running faster-whisper word-level audio alignment...")
-                    from hooky.core.subtitles import transcribe
-                    words = await asyncio.to_thread(transcribe, audio_path)
-
-                    # Group words into speech cue blocks
-                    cues = []
-                    curr = []
-                    for w in words:
-                        curr.append(w)
-                        t = str(w.get("word", "")).strip()
-                        if (t and t[-1] in ".!?") or len(curr) >= 8:
-                            cues.append({
-                                "start": curr[0]["start"],
-                                "end": curr[-1]["end"],
-                                "text": " ".join(x["word"] for x in curr)
-                            })
-                            curr = []
-                    if curr:
-                        cues.append({
-                            "start": curr[0]["start"],
-                            "end": curr[-1]["end"],
-                            "text": " ".join(x["word"] for x in curr)
-                        })
-                    log(f"[whisper] Transcribed {len(words)} words into {len(cues)} dialogue cues.")
-
-            if not cues:
-                log("[pipeline] Dialogue transcription unavailable; falling back to standard pipeline...")
-                await _run_process()
-                return
-
-            # 2. Extract and rank the best scenes across the entire video
-            _JOBS[job_id]["progress"] = 25
-            _JOBS[job_id]["step"] = "Analyzing entire transcript to extract & rank best scenes..."
-            log(f"[analyzer] Step 2: Scoring dialogue pacing, emotional tension, and engagement...")
-
-            # Extract as many non-overlapping scenes as runtime justifies (4-10 scenes)
-            target_clips = min(10, max(4, int(duration // 240) + 1)) if duration > 0 else 6
-            ranked_scenes = extract_ranked_scenes(cues, title, vid_id, duration, max_clips=target_clips)
-
-            if not ranked_scenes:
-                log("[analyzer] No scenes met threshold; falling back to standard pipeline...")
-                await _run_process()
-                return
-
-            total_scenes = len(ranked_scenes)
-            log(f"[analyzer] Extracted {total_scenes} top viral scenes, ranked in best-first order:")
-            for sc in ranked_scenes:
-                log(f"  - Rank #{sc['rank']} ({sc['retention_score']} pts): \"{sc['title']}\" [{format_timestamp(sc['start'])} - {format_timestamp(sc['end'])}] ({sc['duration']}s)")
-
-            # 3. Selectively download and encode each ranked scene (Rank 1 -> Rank N)
-            rendered_files = []
-            for sc in ranked_scenes:
-                rank = sc["rank"]
-                sc_title = sc["title"]
-                score = sc["retention_score"]
-                start = sc["start"]
-                end = sc["end"]
-                dur = sc["duration"]
-
-                prog = 25 + int(((rank - 1) / total_scenes) * 70)
-                _JOBS[job_id]["progress"] = prog
-                _JOBS[job_id]["step"] = f"[{rank}/{total_scenes}] Processing Rank #{rank} ({score} pts): {sc_title}..."
-                log(f"[pipeline] >>> [{rank}/{total_scenes}] Downloading section for Rank #{rank}: '{sc_title}' [{format_timestamp(start)} - {format_timestamp(end)}]...")
-
-                clean_name = re.sub(r"[^\w\-]", "_", sc_title.lower())[:24].strip("_")
-                snippet_path = cache_dir / f"snippet_{vid_id}_{int(start)}_{int(end)}.mp4"
-
-                # Download ONLY this short slice (typically ~5-15 MB instead of several GB!)
-                if not (snippet_path.exists() and snippet_path.stat().st_size > 10000):
-                    cmd = [
-                        sys.executable, "-m", "yt_dlp",
-                        "--download-sections", f"*{int(start)}-{int(end + 1.5)}",
-                        "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
-                        "--merge-output-format", "mp4",
-                        "-o", str(snippet_path),
-                        "--",
-                        url,
-                    ]
-                    proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-                    s_out, s_err = await proc.communicate()
-                    if proc.returncode != 0:
-                        err_msg = s_err.decode("utf-8", errors="replace").strip()
-                        log(f"[downloader] Section download warning for Rank #{rank}: {err_msg[:120]}")
-                        continue
-                    log(f"[downloader] Section download complete ({snippet_path.stat().st_size / (1024*1024):.1f} MB)")
-                else:
-                    log(f"[downloader] Reusing cached section: {snippet_path.name}")
-
-                # Build ASS subtitles
-                hook_cues = [c for c in cues if c["start"] >= start - 1.0 and c["end"] <= end + 1.5]
-                rel_cues = []
-                for c in hook_cues:
-                    rel_cues.append({
-                        "start": max(0.0, c["start"] - start),
-                        "end": max(0.1, c["end"] - start),
-                        "text": c["text"]
-                    })
-
-                ass_path = None
-                if rel_cues:
-                    words = caption_words(rel_cues)
-                    if words:
-                        ass_content = build_ass(words, clip_start=0.0, clip_end=dur, style_name=style_name)
-                        ass_path = cache_dir / f"subs_rank{rank:02d}_{clean_name}_{style_name}.ass"
-                        ass_path.write_text(ass_content, encoding="utf-8")
-
-                # Video title folder
-                clean_folder = sanitize_folder_name(title, fallback=f"video_{vid_id}" if vid_id else "video_reels")
-                target_folder = OUTPUT_DIR / clean_folder
-                target_folder.mkdir(parents=True, exist_ok=True)
-
-                # Cut and encode 1080x1920 vertical Reel
-                out_filename = f"reel_rank{rank:02d}_{score}pts_{clean_name}_{int(time.time())}.mp4"
-                final_out_path = target_folder / out_filename
-                rel_out_path = f"{clean_folder}/{out_filename}"
-                log(f"[ffmpeg] Encoding vertical 1080x1920 reel for Rank #{rank} (style: {style_name}, framing: {framing_mode}) in folder '{clean_folder}'...")
-
-                await asyncio.to_thread(
-                    cut_clip,
-                    video_path=snippet_path,
-                    start=0.0,
-                    end=dur,
-                    out_path=final_out_path,
-                    ass_path=ass_path,
-                    framing=framing_mode,
-                )
-
-                if final_out_path.exists() and final_out_path.stat().st_size > 1000:
-                    rendered_files.append(rel_out_path)
-                    log(f"[pipeline] Successfully rendered Rank #{rank}: {out_filename} ({final_out_path.stat().st_size / (1024*1024):.2f} MB)")
-                    # Clean up intermediate snippet to prevent duplicate video storage
-                    try:
-                        if snippet_path.exists():
-                            snippet_path.unlink()
-                    except OSError:
-                        pass
-
-            # 4. Final summary
-            _JOBS[job_id]["progress"] = 100
-            _JOBS[job_id]["status"] = "completed"
-            _JOBS[job_id]["output_file"] = rendered_files[0] if rendered_files else ""
-            _JOBS[job_id]["output_url"] = f"/api/outputs/{rendered_files[0]}?token={_WEB_TOKEN}" if rendered_files else ""
-            _JOBS[job_id]["step"] = f"Pipeline complete! Rendered {len(rendered_files)} ranked reels in Output Gallery."
-            log(f"[pipeline] Autonomous selective pipeline finished: {len(rendered_files)} ranked reels ready in Gallery.")
-
-        except Exception as exc:
-            log(f"[pipeline error] {exc}")
-            _JOBS[job_id]["status"] = "failed"
-            _JOBS[job_id]["error"] = str(exc)
-
-    if target and (target.startswith("http://") or target.startswith("https://")):
-        asyncio.create_task(_run_selective_make_pipeline(target, style, framing))
-    else:
-        asyncio.create_task(_run_process())
-
-    return {"job_id": job_id, "status": "started"}
+@app.get("/api/jobs")
+async def list_jobs():
+    return {"jobs": [_job_response(job) for job in sorted(_job_manager().jobs.values(), key=lambda job: job["created_at"], reverse=True)]}
 
 
 @app.get("/api/jobs/{job_id}")
 async def get_job_status(job_id: str):
-    """Retrieve status and recent logs for an execution job."""
-    if job_id not in _JOBS:
+    job = _job_manager().jobs.get(job_id)
+    if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    return _JOBS[job_id]
+    return _job_response(job)
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str):
+    manager = _job_manager()
+    if job_id not in manager.jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return _job_response(await manager.cancel(job_id))
 
 
 @app.get("/", response_class=HTMLResponse)

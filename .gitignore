@@ -18,6 +18,7 @@ output/
 node_modules/
 .next/
 .vercel/
+.design-review/
 
 # Partial downloads and Python build artifacts
 *.part

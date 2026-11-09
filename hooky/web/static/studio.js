@@ -12,25 +12,33 @@ if (_injectedToken) {
   window.__HOOKY_TOKEN__ = _injectedToken;
   try {
     sessionStorage.setItem("hooky_token", _injectedToken);
-  } catch (e) {}
+  } catch (e) {
+    /* Storage and URL cleanup are optional; retain the in-memory session. */
+  }
   if (_queryToken) {
     const cleanUrl = window.location.pathname + (window.location.hash || "");
     try {
       window.history.replaceState({}, document.title, cleanUrl);
-    } catch (e) {}
+    } catch (e) {
+      /* Storage and URL cleanup are optional; retain the in-memory session. */
+    }
   }
 } else if (_queryToken) {
   window.__HOOKY_TOKEN__ = _queryToken;
   try {
     sessionStorage.setItem("hooky_token", _queryToken);
-  } catch (e) {}
+  } catch (e) {
+    /* Storage and URL cleanup are optional; retain the in-memory session. */
+  }
 } else {
   try {
     const _saved = sessionStorage.getItem("hooky_token");
     if (_saved) {
       window.__HOOKY_TOKEN__ = _saved;
     }
-  } catch (e) {}
+  } catch (e) {
+    /* Storage and URL cleanup are optional; retain the in-memory session. */
+  }
 }
 
 // Intercept fetch to automatically include X-Hooky-Token header on all API calls
@@ -71,16 +79,177 @@ let autoDetectedFraming = "fit";
 let autoDetectedStyle = "gold";
 let currentPreviewMode = "player";
 let cachedChannels = [];
+let savedChannels = "[]";
+let channelsLoaded = false;
+let channelsSaving = false;
 let cachedEnvConfig = { raw: "", values: {} };
 let isPlaying = false;
 let wordIdx = 0;
 let SCRIPT_WORDS = [];
+let captionTimer = null;
+let envFormBaseline = {};
+let envDraftOperations = [],
+  envEditorDirty = false;
+
+const TERMINAL_JOBS = new Set([
+  "completed",
+  "failed",
+  "cancelled",
+  "interrupted",
+]);
+let jobs = [],
+  activeJobId = null,
+  selectedAnalysisId = null,
+  sourceForHooks = "",
+  activeTab = "studio";
+let jobStarting = false,
+  jobLoopRunning = false,
+  jobsLoading = false,
+  jobsFailed = false,
+  cancelPending = false;
+let pageLeaving = false,
+  pollController = null;
+const jobLogOffsets = new Map();
+let envLoaded = false,
+  envLoading = false,
+  envSaving = false,
+  envDirty = false,
+  envTab = "form",
+  envSwitching = false,
+  envRevision = 0;
+let outputsLoading = false,
+  doctorReady = false,
+  onboardingDismissed = false;
+let outputPlayerTrigger = null;
+const ENV_FIELDS = {
+  GEMINI_API_KEY: "env-gemini-key",
+  GEMINI_MODEL: "env-gemini-model",
+  SUB_STYLE: "env-sub-style",
+  GEMINI_MODEL_FALLBACKS: "env-gemini-fallbacks",
+  AUTO_CLIP_DENSITY_MINUTES: "env-density-minutes",
+  FFMPEG_THREADS: "env-ffmpeg-threads",
+};
+async function apiJson(url, init = {}) {
+  const response = await fetch(url, {
+    ...init,
+    signal: init.signal || AbortSignal.timeout(15000),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(
+      typeof data.detail === "string"
+        ? data.detail
+        : "Request failed (HTTP " + response.status + ")",
+    );
+    error.status = response.status;
+    throw error;
+  }
+  return data;
+}
+function persistStudio() {
+  const source = document.getElementById("source-url").value.trim();
+  let sourceSafe = source;
+  try {
+    const url = new URL(source);
+    if (
+      url.username ||
+      url.password ||
+      [...url.searchParams.keys()].some(
+        (key) => !["v", "t", "start"].includes(key),
+      )
+    )
+      sourceSafe = "";
+  } catch {
+    sourceSafe = "";
+  }
+  const edits = CURRENT_HOOKS.slice(0, 100).map((hook) => ({
+    id: hook.id,
+    start: hook.start,
+    end: hook.end,
+  }));
+  try {
+    localStorage.setItem(
+      "hooky_studio_v1",
+      JSON.stringify({
+        source: sourceSafe,
+        selectedAnalysisId,
+        edits,
+        selected: selectedHookId,
+        framing: activeFramingMode,
+        subtitle: activeSubtitleMode,
+        activeJobId,
+        activeTab,
+        onboardingDismissed,
+      }),
+    );
+  } catch {
+    /* Storage and URL cleanup are optional; retain the in-memory session. */
+  }
+}
+function restoreStudio() {
+  try {
+    const saved = JSON.parse(localStorage.getItem("hooky_studio_v1") || "null");
+    if (!saved) return;
+    document.getElementById("source-url").value =
+      typeof saved.source === "string" ? saved.source : "";
+    selectedAnalysisId = saved.selectedAnalysisId || null;
+    selectedHookId = saved.selected;
+    activeJobId = saved.activeJobId || null;
+    activeTab = saved.activeTab || "studio";
+    onboardingDismissed = Boolean(saved.onboardingDismissed);
+    window._restoredTiming = Array.isArray(saved.edits)
+      ? saved.edits.slice(0, 100)
+      : [];
+    activeFramingMode = ["auto", "fit", "center"].includes(saved.framing)
+      ? saved.framing
+      : "auto";
+    activeSubtitleMode = [
+      "auto",
+      "gold",
+      "hormozi",
+      "clean",
+      "minimal",
+      "emerald",
+      "crimson",
+    ].includes(saved.subtitle)
+      ? saved.subtitle
+      : "auto";
+  } catch {
+    /* Storage and URL cleanup are optional; retain the in-memory session. */
+  }
+}
+function updateOnboarding() {
+  const hasKey = Boolean(cachedEnvConfig.values?.GEMINI_API_KEY);
+  const exported =
+    Number(document.getElementById("gallery-count").textContent) > 0;
+  document.getElementById("first-run").hidden = onboardingDismissed || exported;
+  document.getElementById("setup-health").hidden = doctorReady;
+  document.getElementById("setup-key").hidden = !doctorReady || hasKey;
+  document.getElementById("setup-analysis").hidden =
+    !doctorReady || !hasKey || CURRENT_HOOKS.length > 0;
+  document.getElementById("setup-export").hidden = !CURRENT_HOOKS.length;
+  document.getElementById("setup-health").textContent = doctorReady
+    ? "System health checked"
+    : "Check system health";
+  document.getElementById("setup-key").textContent = cachedEnvConfig.values
+    ?.GEMINI_API_KEY
+    ? "API key configured"
+    : "Configure API key";
+  document.getElementById("setup-analysis").textContent = CURRENT_HOOKS.length
+    ? "Choose a moment to export"
+    : "Analyze your first source";
+}
+function dismissOnboarding() {
+  onboardingDismissed = true;
+  updateOnboarding();
+  persistStudio();
+}
 
 document.addEventListener("DOMContentLoaded", () => {
   lucide.createIcons();
   document.querySelectorAll("label").forEach((label) => {
     const input = label.parentElement.querySelector("input,select,textarea");
-    if (input?.id) label.htmlFor = input.id;
+    if (!label.htmlFor && input?.id) label.htmlFor = input.id;
   });
   document.getElementById("source-url").addEventListener("keydown", (event) => {
     if (event.key === "Enter") triggerAnalyze();
@@ -100,6 +269,40 @@ document.addEventListener("DOMContentLoaded", () => {
           ?.replaceAll("-", " ") || "Studio action",
       );
   });
+  restoreStudio();
+  document.getElementById("source-url").addEventListener("input", () => {
+    persistStudio();
+    updateJobControls();
+  });
+  document
+    .querySelectorAll(
+      "#env-form-view input, #env-form-view select, #env-raw-textarea",
+    )
+    .forEach((field) =>
+      field.addEventListener("input", () => {
+        envDirty = true;
+        envEditorDirty = true;
+        envRevision++;
+        setEnvStatus(
+          "Unsaved settings. Save configuration to apply them to future jobs.",
+          "unsaved",
+        );
+      }),
+    );
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeActivePlayer();
+    if (
+      (event.ctrlKey || event.metaKey) &&
+      event.key === "Enter" &&
+      event.target.id === "env-raw-textarea"
+    ) {
+      event.preventDefault();
+      saveEnvForm();
+    }
+  });
+  switchTab(activeTab);
+  setFramingMode(activeFramingMode);
+  setSubtitleMode(activeSubtitleMode);
   switchPreviewMode("player");
   renderHooksList();
   updateSelectedHookDetails();
@@ -107,20 +310,19 @@ document.addEventListener("DOMContentLoaded", () => {
   loadChannels();
   loadOutputs();
   loadEnvConfig();
-
-  setInterval(() => {
-    if (
-      !isPlaying ||
-      currentPreviewMode !== "canvas" ||
-      CURRENT_HOOKS.length === 0
-    )
-      return;
-    wordIdx = wordIdx + 1;
-    renderSubtitles();
-  }, 380);
+  loadJobs();
+  updateOnboarding();
 });
 
 function switchTab(tabId) {
+  clearTimeout(captionTimer);
+  activeTab = ["studio", "radar", "gallery", "settings", "doctor"].includes(
+    tabId,
+  )
+    ? tabId
+    : "studio";
+  tabId = activeTab;
+  if (document.readyState !== "loading") persistStudio();
   const names = {
     studio: "Clip studio",
     radar: "Channel radar",
@@ -142,6 +344,7 @@ function switchTab(tabId) {
     }
   });
   lucide.createIcons();
+  scheduleCaptionPreview();
 }
 
 function setFramingMode(mode) {
@@ -158,6 +361,7 @@ function setFramingMode(mode) {
     }
   });
   applyVisualFramingState();
+  if (document.readyState !== "loading") persistStudio();
 }
 
 function setSubtitleMode(style) {
@@ -178,6 +382,7 @@ function setSubtitleMode(style) {
     },
   );
   renderSubtitles();
+  if (document.readyState !== "loading") persistStudio();
 }
 
 function applyVisualFramingState() {
@@ -205,8 +410,24 @@ function applyVisualFramingState() {
 }
 
 function switchPreviewMode(mode) {
+  clearTimeout(captionTimer);
   currentPreviewMode = mode;
+  scheduleCaptionPreview();
   const isPlayer = mode === "player";
+  document.getElementById("preview-play-btn").hidden = isPlayer;
+  document.getElementById("preview-play-btn").textContent = matchMedia(
+    "(prefers-reduced-motion: reduce)",
+  ).matches
+    ? "Next caption"
+    : isPlaying
+      ? "Pause captions"
+      : "Play captions";
+  document
+    .getElementById("preview-tab-player")
+    .setAttribute("aria-pressed", String(isPlayer));
+  document
+    .getElementById("preview-tab-canvas")
+    .setAttribute("aria-pressed", String(!isPlayer));
   document
     .getElementById("preview-player-container")
     .classList.toggle("hidden", !isPlayer);
@@ -239,14 +460,16 @@ function extractYouTubeId(url) {
 }
 
 function selectHook(hookId) {
-  selectedHookId = hookId;
+  selectedHookId = String(hookId);
+  wordIdx = 0;
+  persistStudio();
   renderHooksList();
   updateSelectedHookDetails();
 }
 
 function updateSelectedHookDetails() {
   const hook =
-    CURRENT_HOOKS.find((h) => h.id === selectedHookId) ||
+    CURRENT_HOOKS.find((h) => String(h.id) === String(selectedHookId)) ||
     (CURRENT_HOOKS.length > 0 ? CURRENT_HOOKS[0] : null);
   const iframe = document.getElementById("youtube-embed-frame");
   const placeholder = document.getElementById("player-placeholder");
@@ -259,7 +482,11 @@ function updateSelectedHookDetails() {
       iframe.src = "";
       iframe.classList.add("hidden");
     }
-    if (placeholder) placeholder.classList.remove("hidden");
+    if (placeholder) {
+      placeholder.classList.remove("hidden");
+      placeholder.querySelector("p").textContent =
+        'No video loaded. Enter a source URL and click "Detect hooks".';
+    }
     if (timeBadge) timeBadge.innerText = "--:-- - --:--";
     if (dialogueBox)
       dialogueBox.innerHTML =
@@ -270,11 +497,33 @@ function updateSelectedHookDetails() {
     return;
   }
 
-  if (iframe && hook.youtube_embed_url) {
-    iframe.src = hook.youtube_embed_url;
+  const videoId = extractYouTubeId(sourceForHooks);
+  const embedUrl = videoId
+    ? "https://www.youtube-nocookie.com/embed/" +
+      videoId +
+      "?start=" +
+      Math.floor(hook.start) +
+      "&end=" +
+      Math.floor(hook.end) +
+      "&enablejsapi=1"
+    : "";
+  if (iframe && embedUrl) {
+    if (iframe.getAttribute("src") !== embedUrl) iframe.src = embedUrl;
     iframe.classList.remove("hidden");
     if (placeholder) placeholder.classList.add("hidden");
+  } else {
+    if (iframe) {
+      iframe.src = "";
+      iframe.classList.add("hidden");
+    }
+    if (placeholder) {
+      placeholder.classList.remove("hidden");
+      placeholder.querySelector("p").textContent =
+        "Source playback is unavailable here. Preview captions in the 9:16 canvas, then export to watch your clip.";
+    }
   }
+  document.getElementById("timing-start").value = hook.start;
+  document.getElementById("timing-end").value = hook.end;
   if (timeBadge) {
     timeBadge.innerText = `${hook.start_fmt} - ${hook.end_fmt} (${hook.duration})`;
   }
@@ -296,7 +545,7 @@ function updateSelectedHookDetails() {
 
 function renderSubtitles() {
   const hook =
-    CURRENT_HOOKS.find((h) => h.id === selectedHookId) ||
+    CURRENT_HOOKS.find((h) => String(h.id) === String(selectedHookId)) ||
     (CURRENT_HOOKS.length > 0 ? CURRENT_HOOKS[0] : null);
   const previewElem = document.getElementById("canvas-subtitle-preview");
   if (!previewElem) return;
@@ -337,8 +586,10 @@ function renderSubtitles() {
 }
 
 function renderHooksList() {
-  document.getElementById("top-render-btn").disabled =
-    CURRENT_HOOKS.length === 0;
+  updateJobControls();
+  const focusedHookId = document.activeElement?.dataset.hookId;
+  const focusedExport =
+    document.activeElement?.hasAttribute("data-export-hook");
   const container = document.getElementById("hooks-container");
   if (!container) return;
 
@@ -360,7 +611,7 @@ function renderHooksList() {
   }
 
   container.innerHTML = CURRENT_HOOKS.map((h, idx) => {
-    const isSelected = h.id === selectedHookId;
+    const isSelected = String(h.id) === String(selectedHookId);
     const borderClass = isSelected
       ? "border-[#d2fa69] bg-[#242721]"
       : "border-white/[0.08] bg-[#191b18] hover:border-white/20";
@@ -377,7 +628,7 @@ function renderHooksList() {
                 </span>
               </div>
               <div class="flex items-center gap-1 font-mono text-xs tabular">
-                <span class="text-[#d2fa69] font-medium">${h.retention_score}%</span>
+                <span class="text-[#d2fa69] font-medium">${escapeHtml(h.retention_score)}%</span>
                 <span class="text-slate-500 text-[10px]">AI score</span>
               </div>
             </div>
@@ -393,10 +644,10 @@ function renderHooksList() {
 
             <div class="flex items-center justify-between pt-2 border-t border-white/[0.06] text-[11px] font-mono">
               <span class="text-slate-400 tabular">
-                ${h.start_fmt} - ${h.end_fmt} (${h.duration})
+                ${escapeHtml(h.start_fmt)} - ${escapeHtml(h.end_fmt)} (${escapeHtml(h.duration)})
               </span>
               <button
-                data-hook-id="${escapeHtml(h.id)}" onclick="event.stopPropagation(); renderSingleHookById(this.dataset.hookId)"
+                data-export-hook="true" ${activeJobId || jobStarting || jobsLoading || jobsFailed || sourceForHooks !== document.getElementById("source-url").value.trim() ? "disabled" : ""} data-hook-id="${escapeHtml(h.id)}" onclick="event.stopPropagation(); renderSingleHookById(this.dataset.hookId)"
                 class="px-2.5 py-1 bg-[#242721] hover:bg-white hover:text-black border border-white/10 text-white rounded transition-all"
               >
                 Export reel →
@@ -405,33 +656,103 @@ function renderHooksList() {
           </div>
         `;
   }).join("");
+  if (focusedHookId)
+    [...container.querySelectorAll("[data-hook-id]")]
+      .find(
+        (button) =>
+          button.dataset.hookId === focusedHookId &&
+          button.hasAttribute("data-export-hook") === focusedExport,
+      )
+      ?.focus({ preventScroll: true });
   lucide.createIcons();
 }
 
-function nudgeTime(type, delta) {
-  const hook = CURRENT_HOOKS.find((h) => h.id === selectedHookId);
-  if (!hook) return;
-
-  if (type === "start") {
-    hook.start = Math.min(hook.end - 5, Math.max(0, hook.start + delta));
-    hook.start_fmt = formatSecondsToMMSS(hook.start);
-  } else {
-    hook.end = Math.max(hook.start + 5, hook.end + delta);
-    hook.end_fmt = formatSecondsToMMSS(hook.end);
+function scheduleCaptionPreview() {
+  clearTimeout(captionTimer);
+  if (
+    !isPlaying ||
+    document.hidden ||
+    activeTab !== "studio" ||
+    currentPreviewMode !== "canvas" ||
+    !CURRENT_HOOKS.length ||
+    matchMedia("(prefers-reduced-motion: reduce)").matches
+  )
+    return;
+  captionTimer = setTimeout(() => {
+    wordIdx++;
+    renderSubtitles();
+    scheduleCaptionPreview();
+  }, 380);
+}
+document.addEventListener("visibilitychange", scheduleCaptionPreview);
+function togglePreviewPlayback() {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    wordIdx++;
+    renderSubtitles();
+    document.getElementById("preview-play-btn").textContent = "Next caption";
+    return;
   }
-  hook.duration = `${(hook.end - hook.start).toFixed(1)}s`;
-  const vidId = extractYouTubeId(
-    document.getElementById("source-url").value.trim(),
+  isPlaying = !isPlaying;
+  scheduleCaptionPreview();
+  document.getElementById("preview-play-btn").textContent = isPlaying
+    ? "Pause captions"
+    : "Play captions";
+  document
+    .getElementById("preview-play-btn")
+    .setAttribute("aria-pressed", String(isPlaying));
+}
+function validTiming(start, end) {
+  return (
+    Number.isFinite(start) && Number.isFinite(end) && start >= 0 && end > start
   );
-  if (vidId) {
-    hook.youtube_embed_url = `https://www.youtube-nocookie.com/embed/${vidId}?start=${Math.floor(hook.start)}&end=${Math.floor(hook.end)}&autoplay=1&enablejsapi=1`;
+}
+function setHookTiming(start, end) {
+  const hook = CURRENT_HOOKS.find(
+    (h) => String(h.id) === String(selectedHookId),
+  );
+  const alert = document.getElementById("timing-error");
+  if (!hook) {
+    alert.textContent = "Select a moment before editing timing.";
+    return false;
   }
-
+  if (!validTiming(start, end)) {
+    const invalidStart = !Number.isFinite(start) || start < 0;
+    alert.textContent = invalidStart
+      ? "Start must be finite and zero or later."
+      : "End must be finite and follow start.";
+    alert.dataset.field = invalidStart ? "timing-start" : "timing-end";
+    return false;
+  }
+  alert.textContent = "";
+  Object.assign(hook, {
+    start,
+    end,
+    start_fmt: formatSecondsToMMSS(start),
+    end_fmt: formatSecondsToMMSS(end),
+    duration: (end - start).toFixed(1) + "s",
+  });
+  persistStudio();
   updateSelectedHookDetails();
   renderHooksList();
-  appendConsoleLog(
-    `[nudge] Adjusted ${type} boundary by ${delta > 0 ? "+" : ""}${delta}s -> [${hook.start_fmt} - ${hook.end_fmt}]`,
+  return true;
+}
+function applyTiming() {
+  const startField = document.getElementById("timing-start"),
+    endField = document.getElementById("timing-end");
+  return setHookTiming(
+    startField.value.trim() === "" ? NaN : Number(startField.value),
+    endField.value.trim() === "" ? NaN : Number(endField.value),
   );
+}
+function nudgeTime(type, delta) {
+  const hook = CURRENT_HOOKS.find(
+    (h) => String(h.id) === String(selectedHookId),
+  );
+  if (hook)
+    setHookTiming(
+      type === "start" ? Number(hook.start) + delta : Number(hook.start),
+      type === "end" ? Number(hook.end) + delta : Number(hook.end),
+    );
 }
 
 function formatSecondsToMMSS(sec) {
@@ -460,6 +781,7 @@ function appendConsoleLog(msg) {
   const line = document.createElement("p");
   line.innerText = msg;
   box.appendChild(line);
+  while (box.children.length > 200) box.firstElementChild.remove();
   box.scrollTop = box.scrollHeight;
 }
 
@@ -474,463 +796,626 @@ function toggleTerminalLogs() {
 
 // ==================== ENGINE API CALLS ====================
 
-async function triggerAnalyze() {
-  const urlInput = document.getElementById("source-url");
-  const url = urlInput.value.trim();
-  if (!url) {
-    appendConsoleLog("[error] Please paste a YouTube or video URL first.");
-    return;
+function updateJobControls() {
+  const busy = jobStarting || Boolean(activeJobId) || jobsLoading || jobsFailed;
+  const changedSource =
+    sourceForHooks !== document.getElementById("source-url").value.trim();
+  document.getElementById("source-state").textContent =
+    CURRENT_HOOKS.length && changedSource
+      ? "Source changed. Detect hooks before exporting its moments."
+      : "";
+  document.getElementById("analyze-btn").disabled = busy;
+  document.getElementById("execute-make-btn").disabled = busy;
+  document.getElementById("top-render-btn").disabled =
+    busy || !CURRENT_HOOKS.length || changedSource;
+  document.getElementById("source-url").disabled =
+    jobStarting || Boolean(activeJobId);
+  document
+    .querySelectorAll("[data-export-hook]")
+    .forEach((button) => (button.disabled = busy || changedSource));
+  document.getElementById("job-cancel-btn").hidden = !activeJobId;
+  document.getElementById("job-cancel-btn").disabled = cancelPending;
+}
+function renderJobHistory() {
+  const container = document.getElementById("jobs-list");
+  container.replaceChildren();
+  jobs.forEach((job) => {
+    const row = document.createElement("li"),
+      description = document.createElement("span"),
+      title = document.createElement("strong"),
+      detail = document.createElement("small"),
+      status = document.createElement("span");
+    title.textContent = job.title || job.url || job.target || job.type || "Job";
+    detail.textContent = (job.type || "job") + " · " + job.id;
+    description.append(title, detail);
+    status.textContent =
+      job.status +
+      (!TERMINAL_JOBS.has(job.status)
+        ? " · " + Math.round(Number(job.progress) || 0) + "%"
+        : "");
+    row.append(description, status);
+    if (!TERMINAL_JOBS.has(job.status)) {
+      const cancel = document.createElement("button");
+      cancel.textContent = "Cancel";
+      cancel.onclick = () => cancelJob(job.id);
+      row.append(cancel);
+    } else if (
+      job.type === "analyze" &&
+      job.status === "completed" &&
+      job.result?.hooks
+    ) {
+      const restore = document.createElement("button");
+      restore.textContent = "Open analysis";
+      restore.disabled = Boolean(activeJobId);
+      restore.onclick = () => {
+        hydrateAnalysis(job);
+        switchTab("studio");
+      };
+      row.append(restore);
+    } else if (["failed", "cancelled", "interrupted"].includes(job.status)) {
+      const retry = document.createElement("button");
+      retry.textContent = "Retry job";
+      retry.disabled = Boolean(activeJobId) || jobStarting;
+      retry.onclick = () => retryJob(job);
+      row.append(retry);
+    }
+    container.append(row);
+  });
+  if (!jobs.length) {
+    const row = document.createElement("li");
+    row.textContent = "No jobs yet. Detect hooks from a source video.";
+    container.append(row);
   }
-
+}
+function rememberJob(job) {
+  const index = jobs.findIndex((existing) => existing.id === job.id);
+  if (index < 0) jobs.unshift(job);
+  else jobs[index] = { ...jobs[index], ...job };
+  const active = jobs.filter((job) => !TERMINAL_JOBS.has(job.status)),
+    terminal = jobs.filter((job) => TERMINAL_JOBS.has(job.status));
+  jobs = [...active, ...terminal.slice(0, 100)];
+  renderJobHistory();
+}
+function showJob(job) {
+  job = { ...jobs.find((existing) => existing.id === job.id), ...job };
+  document.getElementById("pipeline-stepper").classList.remove("hidden");
+  document.getElementById("active-task-id").textContent = job.id;
+  document.getElementById("stepper-status-text").textContent =
+    job.status + ": " + (job.step || job.type || "Working");
+  const progress = Math.max(0, Math.min(100, Number(job.progress) || 0));
+  document.getElementById("stepper-percent").textContent = progress + "%";
+  document.getElementById("stepper-progress-fill").style.width = progress + "%";
+  const logs = Array.isArray(job.logs) ? job.logs : [],
+    offset = Number(job.log_offset) || 0,
+    seen = jobLogOffsets.get(job.id) || 0;
+  logs.slice(Math.max(0, seen - offset)).forEach(appendConsoleLog);
+  jobLogOffsets.set(job.id, offset + logs.length);
+  while (jobLogOffsets.size > 100)
+    jobLogOffsets.delete(jobLogOffsets.keys().next().value);
+  rememberJob(job);
+}
+function hydrateAnalysis(job, restoreEdits = false) {
+  const source = job.url || job.target || job.result?.url || "";
+  if (!source) return;
+  sourceForHooks = source;
+  document.getElementById("source-url").value = source;
+  selectedAnalysisId = job.id;
+  CURRENT_HOOKS = Array.isArray(job.result?.hooks)
+    ? job.result.hooks.slice(0, 100).map((hook) => ({ ...hook }))
+    : [];
+  currentSourceVideoTitle = job.result?.video_title || "";
+  if (restoreEdits)
+    (window._restoredTiming || []).forEach((edit) => {
+      const hook = CURRENT_HOOKS.find((h) => String(h.id) === String(edit.id));
+      if (hook && validTiming(edit.start, edit.end))
+        Object.assign(hook, edit, {
+          start_fmt: formatSecondsToMMSS(edit.start),
+          end_fmt: formatSecondsToMMSS(edit.end),
+          duration: (edit.end - edit.start).toFixed(1) + "s",
+        });
+    });
+  if (!CURRENT_HOOKS.some((h) => String(h.id) === String(selectedHookId)))
+    selectedHookId = CURRENT_HOOKS[0]?.id || null;
+  autoDetectedFraming = job.result?.recommended_framing || "fit";
+  autoDetectedStyle = job.result?.recommended_style || "gold";
+  document.getElementById("smart-recommendation-text").textContent =
+    "Auto-tuned: " +
+    (autoDetectedFraming === "fit" ? "Canvas fit" : "Center crop") +
+    " + " +
+    autoDetectedStyle;
+  applyVisualFramingState();
+  renderHooksList();
+  updateSelectedHookDetails();
+  updateOnboarding();
+  persistStudio();
+}
+async function finishJob(job) {
+  job = { ...jobs.find((existing) => existing.id === job.id), ...job };
+  if (job.type === "analyze" && job.status === "completed")
+    hydrateAnalysis(job);
+  if (job.status === "failed")
+    appendConsoleLog(
+      "[job error] " + (job.error || "Job failed. Review the logs and retry."),
+    );
+  if (job.status === "interrupted")
+    appendConsoleLog(
+      "[job error] Engine restarted during this job. Retry starts a new job.",
+    );
+  if (job.status === "cancelled")
+    appendConsoleLog(
+      "[job] Cancelled. Your source and selected moments are still here.",
+    );
+  persistStudio();
+  renderHooksList();
+  updateJobControls();
+  renderJobHistory();
+  updateOnboarding();
+  if (job.status === "completed" && job.type !== "analyze") await loadOutputs();
+}
+async function loadJobs() {
+  if (jobsLoading) return;
+  jobsLoading = true;
+  updateJobControls();
+  const status = document.getElementById("jobs-status");
+  status.textContent = "Loading job history…";
+  document.getElementById("jobs-retry-btn").hidden = true;
+  try {
+    const data = await apiJson("/api/jobs");
+    if (!Array.isArray(data.jobs))
+      throw new Error("Invalid job history response");
+    jobs = data.jobs;
+    jobsFailed = false;
+    const analysis = jobs.find(
+      (job) => job.id === selectedAnalysisId && job.status === "completed",
+    );
+    if (analysis) {
+      const currentSource = document.getElementById("source-url").value;
+      hydrateAnalysis(analysis, true);
+      if (currentSource !== sourceForHooks)
+        document.getElementById("source-url").value = currentSource;
+    }
+    const previous = jobs.find((job) => job.id === activeJobId);
+    if (previous && TERMINAL_JOBS.has(previous.status)) {
+      activeJobId = null;
+      showJob(previous);
+      await finishJob(previous);
+    } else
+      activeJobId =
+        (previous && !TERMINAL_JOBS.has(previous.status)
+          ? previous
+          : jobs.find((job) => !TERMINAL_JOBS.has(job.status))
+        )?.id || null;
+    status.textContent = jobs.length ? "Recent jobs" : "";
+    renderJobHistory();
+    persistStudio();
+  } catch (error) {
+    jobsFailed = true;
+    status.textContent = "Couldn’t load job history. " + error.message;
+    document.getElementById("jobs-retry-btn").hidden = false;
+  } finally {
+    jobsLoading = false;
+    updateJobControls();
+  }
+  if (activeJobId && !jobsFailed) pollJobs();
+}
+async function pollJobs() {
+  if (jobLoopRunning || pageLeaving) return;
+  jobLoopRunning = true;
+  let failures = 0;
+  try {
+    while (activeJobId && !pageLeaving) {
+      const id = activeJobId,
+        known = jobs.find((job) => job.id === id);
+      pollController = new AbortController();
+      const timeout = setTimeout(() => pollController?.abort(), 15000);
+      try {
+        const job = await apiJson(
+          known?.type === "analyze"
+            ? "/api/analyze/status/" + encodeURIComponent(id)
+            : "/api/jobs/" + encodeURIComponent(id),
+          { signal: pollController.signal },
+        );
+        if (activeJobId !== id || pageLeaving) continue;
+        if (
+          !job.status ||
+          !["queued", "running", "cancelling", ...TERMINAL_JOBS].includes(
+            job.status,
+          )
+        )
+          throw new Error("Invalid job status response");
+        job.id = job.id || id;
+        job.type = job.type || known?.type;
+        failures = 0;
+        document.getElementById("job-retry-btn").hidden = true;
+        showJob(job);
+        if (TERMINAL_JOBS.has(job.status)) {
+          activeJobId = null;
+          await finishJob(jobs.find((existing) => existing.id === id) || job);
+          activeJobId =
+            jobs.find((other) => !TERMINAL_JOBS.has(other.status))?.id || null;
+          persistStudio();
+          updateJobControls();
+        }
+      } catch (error) {
+        if (pageLeaving) break;
+        if (activeJobId !== id) continue;
+        failures++;
+        const stop = failures >= 5 || [401, 403, 404].includes(error.status);
+        document.getElementById("stepper-status-text").textContent =
+          "Connection lost. " +
+          error.message +
+          (stop ? " Retry status to reconnect." : " Reconnecting…");
+        if (stop) {
+          document.getElementById("job-retry-btn").hidden = false;
+          break;
+        }
+      } finally {
+        clearTimeout(timeout);
+        pollController = null;
+      }
+      if (activeJobId && !pageLeaving)
+        await new Promise((resolve) =>
+          setTimeout(resolve, Math.min(1000 * 2 ** failures, 10000)),
+        );
+    }
+  } finally {
+    jobLoopRunning = false;
+  }
+}
+async function cancelJob(id = activeJobId) {
+  if (!id || cancelPending) return;
+  cancelPending = true;
+  updateJobControls();
+  try {
+    const job = await apiJson(
+      "/api/jobs/" + encodeURIComponent(id) + "/cancel",
+      { method: "POST" },
+    );
+    job.id = job.id || id;
+    job.type = job.type || jobs.find((existing) => existing.id === id)?.type;
+    rememberJob(job);
+    if (id === activeJobId) {
+      showJob(job);
+      if (TERMINAL_JOBS.has(job.status)) {
+        activeJobId = null;
+        pollController?.abort();
+        await finishJob(job);
+        activeJobId =
+          jobs.find((other) => !TERMINAL_JOBS.has(other.status))?.id || null;
+        if (activeJobId) pollJobs();
+      }
+    }
+    persistStudio();
+  } catch (error) {
+    appendConsoleLog(
+      "[cancel error] Couldn’t cancel the job. " +
+        error.message +
+        " Try Cancel again.",
+    );
+  } finally {
+    cancelPending = false;
+    updateJobControls();
+  }
+}
+async function startJob(type, endpoint, payload) {
+  if (jobStarting || activeJobId || jobsLoading || jobsFailed) return;
   document.getElementById("studio-alert").classList.add("hidden");
-  const analyzeBtn = document.getElementById("analyze-btn");
-  analyzeBtn.disabled = true;
-  analyzeBtn.innerHTML = `<i data-lucide="loader" class="w-4 h-4 animate-spin"></i><span>Analyzing...</span>`;
-  lucide.createIcons();
-
-  const stepper = document.getElementById("pipeline-stepper");
-  stepper.classList.remove("hidden");
-
+  jobStarting = true;
+  updateJobControls();
   try {
-    appendConsoleLog(`[pipeline] Dispatching hook analysis request for ${url}`);
-    const startRes = await fetch("/api/analyze/start", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url }),
-    });
-
-    if (!startRes.ok) {
-      const errData = await startRes
-        .json()
-        .catch(() => ({ detail: `HTTP ${startRes.status}` }));
-      throw new Error(
-        errData.detail || `Server returned HTTP ${startRes.status}`,
-      );
-    }
-
-    const startData = await startRes.json();
-    const job_id = startData.job_id;
-    if (!job_id) {
-      throw new Error("Server did not return a valid job ID");
-    }
-    document.getElementById("active-task-id").innerText = job_id;
-
-    const pollInterval = setInterval(async () => {
-      try {
-        const sRes = await fetch(`/api/analyze/status/${job_id}`);
-        if (!sRes.ok) {
-          const err = await sRes
-            .json()
-            .catch(() => ({ detail: `HTTP ${sRes.status}` }));
-          throw new Error(err.detail || `Polling failed (HTTP ${sRes.status})`);
-        }
-        const job = await sRes.json();
-        if (!job || job.detail) {
-          throw new Error(job?.detail || "Invalid job response");
-        }
-
-        document.getElementById("stepper-status-text").innerText =
-          job.step || "Running AI hook detection...";
-        document.getElementById("stepper-percent").innerText =
-          `${job.progress || 10}%`;
-        document.getElementById("stepper-progress-fill").style.width =
-          `${job.progress || 10}%`;
-
-        if (job.logs && job.logs.length > 0) {
-          job.logs.forEach((l) => appendConsoleLog(l));
-        }
-
-        if (job.status === "completed" || job.status === "failed") {
-          clearInterval(pollInterval);
-          analyzeBtn.disabled = false;
-          analyzeBtn.innerHTML = `<i data-lucide="sparkles" class="w-4 h-4"></i><span>Detect hooks</span>`;
-          lucide.createIcons();
-
-          if (job.status === "failed") {
-            appendConsoleLog(
-              `[pipeline error] Hook detection failed: ${job.error || "Unknown error"}`,
-            );
-            return;
-          }
-
-          if (job.result && job.result.hooks && job.result.hooks.length > 0) {
-            CURRENT_HOOKS = job.result.hooks;
-            currentSourceVideoTitle = job.result.video_title || "";
-            selectedHookId = CURRENT_HOOKS[0].id;
-            isPlaying = true;
-            autoDetectedFraming = job.result.recommended_framing || "fit";
-            autoDetectedStyle = job.result.recommended_style || "gold";
-
-            document.getElementById("smart-recommendation-text").innerText =
-              `Auto-tuned: ${autoDetectedFraming === "fit" ? "Canvas fit" : "Center crop"} + ${autoDetectedStyle}`;
-
-            setFramingMode(autoDetectedFraming);
-            setSubtitleMode(autoDetectedStyle);
-            renderHooksList();
-            updateSelectedHookDetails();
-            appendConsoleLog(
-              `[pipeline] Hook analysis completed successfully. ${CURRENT_HOOKS.length} moments ready.`,
-            );
-          } else {
-            appendConsoleLog(`[pipeline] No hooks found in video transcript.`);
-          }
-        }
-      } catch (pollErr) {
-        clearInterval(pollInterval);
-        appendConsoleLog(`[pipeline error] ${pollErr.message}`);
-        analyzeBtn.disabled = false;
-        analyzeBtn.innerHTML = `<i data-lucide="sparkles" class="w-4 h-4"></i><span>Detect hooks</span>`;
-        lucide.createIcons();
-      }
-    }, 1000);
-  } catch (e) {
-    console.error(e);
-    appendConsoleLog(`[analyzer error] ${e.message}`);
-    analyzeBtn.disabled = false;
-    analyzeBtn.innerHTML = `<i data-lucide="sparkles" class="w-4 h-4"></i><span>Detect hooks</span>`;
-    lucide.createIcons();
-  }
-}
-
-async function renderSelectedHook() {
-  if (!CURRENT_HOOKS || CURRENT_HOOKS.length === 0) {
-    appendConsoleLog(
-      "[error] No hooks available. Please enter a video URL and detect hooks first.",
-    );
-    return;
-  }
-  const hook =
-    CURRENT_HOOKS.find((h) => h.id === selectedHookId) || CURRENT_HOOKS[0];
-  if (!hook) {
-    appendConsoleLog("[error] Please select a hook to export.");
-    return;
-  }
-  await renderSingleHookById(hook.id);
-}
-
-async function renderSingleHookById(hookId) {
-  const hook = CURRENT_HOOKS.find((h) => h.id === hookId);
-  if (!hook) {
-    appendConsoleLog("[error] Selected hook was not found.");
-    return;
-  }
-
-  const urlVal = document.getElementById("source-url").value.trim();
-  if (!urlVal) {
-    appendConsoleLog("[error] Missing source video URL.");
-    return;
-  }
-
-  const btn = document.getElementById("top-render-btn");
-  btn.disabled = true;
-  btn.innerHTML = `<i data-lucide="loader" class="w-4 h-4 animate-spin"></i><span>Exporting...</span>`;
-  lucide.createIcons();
-
-  const stepper = document.getElementById("pipeline-stepper");
-  stepper.classList.remove("hidden");
-
-  const framing =
-    activeFramingMode === "auto" ? autoDetectedFraming : activeFramingMode;
-  const style =
-    activeSubtitleMode === "auto" ? autoDetectedStyle : activeSubtitleMode;
-
-  try {
-    appendConsoleLog(
-      `[renderer] Initiating 9:16 export: "${hook.title}" [${hook.start}s - ${hook.end}s]`,
-    );
-    const res = await fetch("/api/jobs/render_clip", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        url: urlVal,
-        start: hook.start,
-        end: hook.end,
-        style: style,
-        framing: framing,
-        title: hook.title,
-        video_title: currentSourceVideoTitle || "",
-      }),
-    });
-
-    if (!res.ok) {
-      const errData = await res
-        .json()
-        .catch(() => ({ detail: `HTTP ${res.status}` }));
-      throw new Error(errData.detail || `Server returned HTTP ${res.status}`);
-    }
-
-    const data = await res.json();
-    const job_id = data.job_id;
-    if (!job_id) {
-      throw new Error("Server did not return a valid job ID");
-    }
-    document.getElementById("active-task-id").innerText = job_id;
-
-    let lastRenderLogIndex = 0;
-    const pollRender = setInterval(async () => {
-      try {
-        const sRes = await fetch(`/api/jobs/${job_id}`);
-        if (!sRes.ok) {
-          const err = await sRes
-            .json()
-            .catch(() => ({ detail: `HTTP ${sRes.status}` }));
-          throw new Error(
-            err.detail || `Render status check failed (HTTP ${sRes.status})`,
-          );
-        }
-        const job = await sRes.json();
-        if (!job || job.detail) {
-          throw new Error(job?.detail || "Invalid render job response");
-        }
-
-        document.getElementById("stepper-status-text").innerText =
-          job.step || "Encoding vertical 1080x1920 reel...";
-        document.getElementById("stepper-percent").innerText =
-          `${job.progress || 10}%`;
-        document.getElementById("stepper-progress-fill").style.width =
-          `${job.progress || 10}%`;
-
-        if (job.logs && job.logs.length > lastRenderLogIndex) {
-          const newLogs = job.logs.slice(lastRenderLogIndex);
-          newLogs.forEach((l) => appendConsoleLog(l));
-          lastRenderLogIndex = job.logs.length;
-        }
-
-        if (job.status === "completed" || job.status === "failed") {
-          clearInterval(pollRender);
-          btn.disabled = false;
-          btn.innerHTML = `<i data-lucide="video" class="w-4 h-4"></i><span>Export 9:16</span>`;
-          lucide.createIcons();
-
-          if (job.status === "failed") {
-            appendConsoleLog(
-              `[render error] ${job.error || "Video export failed"}`,
-            );
-            return;
-          }
-
-          if (job.status === "completed") {
-            appendConsoleLog(
-              `[renderer] Reel rendered successfully: ${job.output_file}`,
-            );
-            await loadOutputs();
-            switchTab("gallery");
-            if (job.output_file) {
-              playOutputVideo(job.output_file, hook.title);
-            }
-          }
-        }
-      } catch (pollErr) {
-        clearInterval(pollRender);
-        appendConsoleLog(`[render error] ${pollErr.message}`);
-        btn.disabled = false;
-        btn.innerHTML = `<i data-lucide="video" class="w-4 h-4"></i><span>Export 9:16</span>`;
-        lucide.createIcons();
-      }
-    }, 1000);
-  } catch (e) {
-    console.error(e);
-    appendConsoleLog(`[render error] ${e.message}`);
-    btn.disabled = false;
-    btn.innerHTML = `<i data-lucide="video" class="w-4 h-4"></i><span>Export 9:16</span>`;
-    lucide.createIcons();
-  }
-}
-
-async function triggerMakePipeline() {
-  const target = document.getElementById("source-url").value.trim();
-  if (!target) {
-    appendConsoleLog("[error] Please enter a URL or target to run pipeline.");
-    return;
-  }
-
-  const btn = document.getElementById("execute-make-btn");
-  btn.disabled = true;
-  btn.innerHTML = `<i data-lucide="loader" class="w-3.5 h-3.5 animate-spin"></i><span>Running...</span>`;
-  lucide.createIcons();
-
-  const stepper = document.getElementById("pipeline-stepper");
-  stepper.classList.remove("hidden");
-
-  try {
-    const res = await fetch("/api/jobs/make", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        target: target,
-        framing:
-          activeFramingMode === "auto"
-            ? autoDetectedFraming
-            : activeFramingMode,
-        style:
-          activeSubtitleMode === "auto"
-            ? autoDetectedStyle
-            : activeSubtitleMode,
-      }),
-    });
-
-    if (!res.ok) {
-      const errData = await res
-        .json()
-        .catch(() => ({ detail: `HTTP ${res.status}` }));
-      throw new Error(errData.detail || `Server returned HTTP ${res.status}`);
-    }
-
-    const data = await res.json();
-    const job_id = data.job_id;
-    if (!job_id) {
-      throw new Error("Server did not return a valid job ID");
-    }
-    document.getElementById("active-task-id").innerText = job_id;
-
-    let lastMakeLogIndex = 0;
-    const pollMake = setInterval(async () => {
-      try {
-        const sRes = await fetch(`/api/jobs/${job_id}`);
-        if (!sRes.ok) {
-          const err = await sRes
-            .json()
-            .catch(() => ({ detail: `HTTP ${sRes.status}` }));
-          throw new Error(
-            err.detail || `Pipeline check failed (HTTP ${sRes.status})`,
-          );
-        }
-        const job = await sRes.json();
-        if (!job || job.detail) {
-          throw new Error(job?.detail || "Invalid pipeline response");
-        }
-
-        document.getElementById("stepper-status-text").innerText =
-          job.step || "Autonomous pipeline active...";
-        document.getElementById("stepper-percent").innerText =
-          `${job.progress || 10}%`;
-        document.getElementById("stepper-progress-fill").style.width =
-          `${job.progress || 10}%`;
-
-        if (job.logs && job.logs.length > lastMakeLogIndex) {
-          const newLogs = job.logs.slice(lastMakeLogIndex);
-          newLogs.forEach((l) => appendConsoleLog(l));
-          lastMakeLogIndex = job.logs.length;
-        }
-
-        if (job.status === "completed" || job.status === "failed") {
-          clearInterval(pollMake);
-          btn.disabled = false;
-          btn.innerHTML = `<i data-lucide="play" class="w-3.5 h-3.5 text-[#d2fa69]"></i><span>Run pipeline</span>`;
-          lucide.createIcons();
-          if (job.status === "failed") {
-            appendConsoleLog(
-              `[pipeline error] Job failed: ${job.error || "Unknown error"}`,
-            );
-          }
-          loadOutputs();
-        }
-      } catch (pollErr) {
-        clearInterval(pollMake);
-        appendConsoleLog(`[pipeline error] ${pollErr.message}`);
-        btn.disabled = false;
-        btn.innerHTML = `<i data-lucide="play" class="w-3.5 h-3.5 text-[#d2fa69]"></i><span>Run pipeline</span>`;
-        lucide.createIcons();
-      }
-    }, 1000);
-  } catch (e) {
-    console.error(e);
-    appendConsoleLog(`[pipeline error] ${e.message}`);
-    btn.disabled = false;
-    btn.innerHTML = `<i data-lucide="play" class="w-3.5 h-3.5 text-[#d2fa69]"></i><span>Run pipeline</span>`;
-    lucide.createIcons();
-  }
-}
-
-// ==================== SETTINGS & .ENV MANAGEMENT ====================
-async function loadEnvConfig() {
-  try {
-    const res = await fetch("/api/env");
-    const data = await res.json();
-    cachedEnvConfig = data;
-    const vals = data.values || {};
-
-    document.getElementById("env-gemini-key").value = vals.GEMINI_API_KEY || "";
-    if (vals.GEMINI_MODEL)
-      document.getElementById("env-gemini-model").value = vals.GEMINI_MODEL;
-    if (vals.SUB_STYLE)
-      document.getElementById("env-sub-style").value = vals.SUB_STYLE;
-    if (vals.GEMINI_MODEL_FALLBACKS)
-      document.getElementById("env-gemini-fallbacks").value =
-        vals.GEMINI_MODEL_FALLBACKS;
-    if (vals.AUTO_CLIP_DENSITY_MINUTES)
-      document.getElementById("env-density-minutes").value =
-        vals.AUTO_CLIP_DENSITY_MINUTES;
-    if (vals.FFMPEG_THREADS)
-      document.getElementById("env-ffmpeg-threads").value = vals.FFMPEG_THREADS;
-
-    document.getElementById("env-raw-textarea").value = data.raw || "";
-  } catch (e) {
-    console.error(e);
-  }
-}
-
-async function saveEnvForm() {
-  const activeIsRaw = !document
-    .getElementById("env-raw-view")
-    .classList.contains("hidden");
-  let payload = {};
-
-  if (activeIsRaw) {
-    payload = { raw: document.getElementById("env-raw-textarea").value };
-  } else {
-    payload = {
-      values: {
-        GEMINI_API_KEY: document.getElementById("env-gemini-key").value.trim(),
-        GEMINI_MODEL: document.getElementById("env-gemini-model").value,
-        SUB_STYLE: document.getElementById("env-sub-style").value,
-        GEMINI_MODEL_FALLBACKS: document
-          .getElementById("env-gemini-fallbacks")
-          .value.trim(),
-        AUTO_CLIP_DENSITY_MINUTES: document.getElementById(
-          "env-density-minutes",
-        ).value,
-        FFMPEG_THREADS: document.getElementById("env-ffmpeg-threads").value,
-      },
-    };
-  }
-
-  try {
-    const res = await fetch("/api/env", {
+    const data = await apiJson(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    if (res.ok) {
-      const alertElem = document.getElementById("env-status-alert");
-      alertElem.classList.remove("hidden");
-      setTimeout(() => alertElem.classList.add("hidden"), 3500);
-      await loadEnvConfig();
+    if (!data.job_id) throw new Error("Server did not return a valid job ID");
+    activeJobId = data.job_id;
+    showJob({
+      id: activeJobId,
+      type,
+      status: "queued",
+      progress: 0,
+      step: "Waiting for engine",
+      url: payload.url || payload.target,
+      title: payload.title,
+    });
+    persistStudio();
+  } catch (error) {
+    appendConsoleLog(
+      "[job error] " +
+        error.message +
+        " Checking history before another launch.",
+    );
+    await loadJobs();
+  } finally {
+    jobStarting = false;
+    updateJobControls();
+  }
+  if (activeJobId) pollJobs();
+}
+async function triggerAnalyze() {
+  const url = document.getElementById("source-url").value.trim();
+  if (!url) return appendConsoleLog("[error] Paste a source video URL first.");
+  persistStudio();
+  await startJob("analyze", "/api/analyze/start", { url });
+}
+async function renderSelectedHook() {
+  const hook =
+    CURRENT_HOOKS.find((h) => String(h.id) === String(selectedHookId)) ||
+    CURRENT_HOOKS[0];
+  if (!hook)
+    return appendConsoleLog("[error] Detect hooks and select a moment first.");
+  await renderSingleHookById(hook.id);
+}
+async function renderSingleHookById(hookId) {
+  if (String(hookId) === String(selectedHookId) && !applyTiming()) {
+    document
+      .getElementById(document.getElementById("timing-error").dataset.field)
+      ?.focus();
+    return;
+  }
+  const hook = CURRENT_HOOKS.find((h) => String(h.id) === String(hookId)),
+    url = document.getElementById("source-url").value.trim();
+  if (!hook || !url || url !== sourceForHooks)
+    return appendConsoleLog(
+      "[error] Analyze this source before exporting its moments.",
+    );
+  if (!validTiming(Number(hook.start), Number(hook.end)))
+    return appendConsoleLog(
+      "[error] Correct clip start and end before exporting.",
+    );
+  await startJob("render_clip", "/api/jobs/render_clip", {
+    url,
+    start: Number(hook.start),
+    end: Number(hook.end),
+    style:
+      activeSubtitleMode === "auto" ? autoDetectedStyle : activeSubtitleMode,
+    framing:
+      activeFramingMode === "auto" ? autoDetectedFraming : activeFramingMode,
+    title: hook.title,
+    video_title: currentSourceVideoTitle,
+  });
+}
+async function triggerMakePipeline() {
+  const target = document.getElementById("source-url").value.trim();
+  if (!target)
+    return appendConsoleLog(
+      "[error] Paste a source URL before running the pipeline.",
+    );
+  await startJob("make", "/api/jobs/make", {
+    target,
+    framing:
+      activeFramingMode === "auto" ? autoDetectedFraming : activeFramingMode,
+    style:
+      activeSubtitleMode === "auto" ? autoDetectedStyle : activeSubtitleMode,
+  });
+}
+async function retryJob(job) {
+  job = { ...job, ...job.request };
+  const source = job.url || job.target;
+  if (!source)
+    return appendConsoleLog(
+      "[error] Paste the source again to retry this job.",
+    );
+  document.getElementById("source-url").value = source;
+  switchTab("studio");
+  if (job.type === "analyze") return triggerAnalyze();
+  if (job.type === "make") return triggerMakePipeline();
+  if (!validTiming(Number(job.start), Number(job.end)))
+    return appendConsoleLog("[error] Select a moment and export it again.");
+  await startJob("render_clip", "/api/jobs/render_clip", {
+    url: source,
+    start: Number(job.start),
+    end: Number(job.end),
+    title: job.title || "",
+    video_title: job.video_title || "",
+    framing: job.framing || "fit",
+    style: job.style || "gold",
+  });
+}
+window.addEventListener("pagehide", () => {
+  pageLeaving = true;
+  clearTimeout(captionTimer);
+  pollController?.abort();
+});
+
+// ==================== SETTINGS & .ENV MANAGEMENT ====================
+
+function setEnvStatus(message, state = "ready") {
+  const status = document.getElementById("env-status-alert");
+  status.classList.remove("hidden");
+  status.textContent = message;
+  status.dataset.state = state;
+  document.getElementById("env-save-btn").disabled =
+    !envLoaded || envSaving || envLoading || envSwitching;
+  document.getElementById("env-retry-btn").hidden =
+    state !== "error" || envDirty;
+  document.getElementById("env-discard-btn").hidden = !envDirty;
+  document
+    .querySelectorAll(
+      "#env-form-view input,#env-form-view select,#env-raw-textarea,#env-tab-form,#env-tab-raw",
+    )
+    .forEach(
+      (field) =>
+        (field.disabled =
+          !envLoaded || envSaving || envLoading || envSwitching),
+    );
+}
+function envFormValues() {
+  return Object.fromEntries(
+    Object.entries(ENV_FIELDS)
+      .map(([key, id]) => [key, document.getElementById(id).value])
+      .filter(([key, value]) => value !== envFormBaseline[key]),
+  );
+}
+function applyEnvDocument(data) {
+  if (
+    typeof data.raw !== "string" ||
+    !data.values ||
+    typeof data.values !== "object"
+  )
+    throw new Error("Invalid settings response");
+  cachedEnvConfig = { raw: data.raw, values: data.values };
+  for (const [key, id] of Object.entries(ENV_FIELDS)) {
+    const field = document.getElementById(id),
+      value = data.values[key] || "";
+    if (
+      field.tagName === "SELECT" &&
+      value &&
+      ![...field.options].some((option) => option.value === value)
+    ) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = value;
+      field.append(option);
     }
-  } catch (e) {
-    console.error(e);
+    field.value = value;
+  }
+  envFormBaseline = Object.fromEntries(
+    Object.entries(ENV_FIELDS).map(([key, id]) => [
+      key,
+      document.getElementById(id).value,
+    ]),
+  );
+  document.getElementById("env-raw-textarea").value = data.raw;
+  updateOnboarding();
+}
+async function loadEnvConfig(discard = false) {
+  if (envLoading || envSaving || (envDirty && !discard)) return;
+  if (discard) {
+    envDirty = false;
+    envRevision++;
+  }
+  envLoading = true;
+  setEnvStatus("Loading settings…", "loading");
+  try {
+    applyEnvDocument(await apiJson("/api/env"));
+    envDraftOperations = [];
+    envEditorDirty = false;
+    envLoaded = true;
+    envDirty = false;
+    setEnvStatus(
+      "Settings loaded. Saves apply to new jobs; running jobs keep their starting settings.",
+    );
+  } catch (error) {
+    setEnvStatus(
+      "Couldn’t load settings. " + error.message + " Retry loading.",
+      "error",
+    );
+  } finally {
+    envLoading = false;
+    setEnvStatus(
+      document.getElementById("env-status-alert").textContent,
+      document.getElementById("env-status-alert").dataset.state,
+    );
   }
 }
-
-function switchEnvTab(mode) {
+function currentEnvOperation() {
+  return envTab === "raw"
+    ? { raw: document.getElementById("env-raw-textarea").value }
+    : { values: envFormValues() };
+}
+function draftPayload() {
+  const draft = [...envDraftOperations];
+  if (envEditorDirty || !draft.length) draft.push(currentEnvOperation());
+  return { draft };
+}
+async function saveEnvForm() {
+  if (!envLoaded || envSaving || envLoading || envSwitching) return;
+  envSaving = true;
+  setEnvStatus("Saving configuration…", "saving");
+  try {
+    const payload = draftPayload();
+    const data = await apiJson("/api/env", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    applyEnvDocument(data);
+    envDraftOperations = [];
+    envEditorDirty = false;
+    envDirty = false;
+    const restart =
+      Array.isArray(data.restart_required) && data.restart_required.length
+        ? " Restart the engine for: " + data.restart_required.join(", ") + "."
+        : "";
+    setEnvStatus(
+      "Configuration saved for new jobs. Running jobs keep their starting settings." +
+        restart,
+      "saved",
+    );
+  } catch (error) {
+    setEnvStatus(
+      "Couldn’t save configuration. Your edits are still here. " +
+        error.message,
+      "error",
+    );
+  } finally {
+    envSaving = false;
+    setEnvStatus(
+      document.getElementById("env-status-alert").textContent,
+      document.getElementById("env-status-alert").dataset.state,
+    );
+  }
+}
+async function switchEnvTab(mode) {
+  if (mode === envTab || envSwitching || envSaving || !envLoaded) return;
+  if (envEditorDirty && envDraftOperations.length >= 99) {
+    setEnvStatus(
+      "Save this draft before switching editors again. Your edits are still here.",
+      "error",
+    );
+    return;
+  }
+  if (envEditorDirty) {
+    envSwitching = true;
+    setEnvStatus("Checking draft before switching editors…", "loading");
+    try {
+      const payload = draftPayload();
+      const data = await apiJson("/api/env/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      applyEnvDocument(data);
+      envDraftOperations = payload.draft;
+      envEditorDirty = false;
+    } catch (error) {
+      setEnvStatus(
+        "Couldn’t switch editors. Your draft is still here. " + error.message,
+        "error",
+      );
+      return;
+    } finally {
+      envSwitching = false;
+      setEnvStatus(
+        document.getElementById("env-status-alert").textContent,
+        document.getElementById("env-status-alert").dataset.state,
+      );
+    }
+  }
+  envTab = mode;
   const isRaw = mode === "raw";
   document.getElementById("env-form-view").classList.toggle("hidden", isRaw);
   document.getElementById("env-raw-view").classList.toggle("hidden", !isRaw);
-
-  const tabForm = document.getElementById("env-tab-form");
-  const tabRaw = document.getElementById("env-tab-raw");
-
-  if (isRaw) {
-    tabRaw.className =
-      "px-3 py-1.5 bg-[#242721] text-white font-medium rounded-md border border-white/10 transition-all";
-    tabForm.className =
-      "px-3 py-1.5 text-slate-400 hover:text-white rounded-md transition-all";
-  } else {
-    tabForm.className =
-      "px-3 py-1.5 bg-[#242721] text-white font-medium rounded-md border border-white/10 transition-all";
-    tabRaw.className =
-      "px-3 py-1.5 text-slate-400 hover:text-white rounded-md transition-all";
-  }
+  document
+    .getElementById("env-tab-form")
+    .setAttribute("aria-pressed", String(!isRaw));
+  document
+    .getElementById("env-tab-raw")
+    .setAttribute("aria-pressed", String(isRaw));
+  document
+    .getElementById("env-tab-form")
+    .classList.toggle("env-tab-active", !isRaw);
+  document
+    .getElementById("env-tab-raw")
+    .classList.toggle("env-tab-active", isRaw);
+  setEnvStatus(
+    envDirty
+      ? "Unsaved draft. Switching editors did not save it."
+      : "Settings loaded.",
+    envDirty ? "unsaved" : "ready",
+  );
 }
 
 function togglePasswordVisibility(fieldId, btn) {
@@ -946,14 +1431,61 @@ function togglePasswordVisibility(fieldId, btn) {
 }
 
 // ==================== CHANNELS.TXT RADAR ====================
+function channelsDirty() {
+  return channelsLoaded && JSON.stringify(cachedChannels) !== savedChannels;
+}
+
+function setChannelsStatus(message, state = "idle", retry = false) {
+  const status = document.getElementById("channels-status");
+  status.textContent = message;
+  status.dataset.state = state;
+  document.getElementById("channels-retry-btn").hidden = !retry;
+  document.getElementById("channels-save-btn").disabled =
+    !channelsLoaded || channelsSaving || !channelsDirty();
+  document.getElementById("channels-save-label").textContent = channelsSaving
+    ? "Saving…"
+    : "Save channels";
+  document.getElementById("new-channel-input").disabled =
+    !channelsLoaded || channelsSaving;
+  document.getElementById("channels-add-btn").disabled =
+    !channelsLoaded || channelsSaving;
+  document.querySelectorAll("#channels-table-body button").forEach((button) => {
+    button.disabled = channelsSaving;
+  });
+}
+
 async function loadChannels() {
+  if (channelsSaving || channelsDirty()) return;
+  channelsLoaded = false;
+  setChannelsStatus("Loading channels…", "loading");
   try {
-    const res = await fetch("/api/channels");
+    const res = await fetch("/api/channels", {
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) throw new Error("Channel request failed");
     const data = await res.json();
-    cachedChannels = data.channels || [];
+    if (
+      !Array.isArray(data.channels) ||
+      data.channels.some((line) => typeof line !== "string")
+    ) {
+      throw new Error("Invalid channel response");
+    }
+    cachedChannels = data.channels;
+    savedChannels = JSON.stringify(cachedChannels);
+    channelsLoaded = true;
     renderChannelsTable();
+    setChannelsStatus(
+      cachedChannels.length
+        ? "Channels are up to date."
+        : "Add a YouTube channel to get started.",
+    );
   } catch (e) {
-    console.error(e);
+    document.getElementById("channels-table-body").replaceChildren();
+    setChannelsStatus(
+      "Couldn’t load channels. Check that Hooky is running, then retry.",
+      "error",
+      true,
+    );
   }
 }
 
@@ -970,17 +1502,20 @@ function renderChannelsTable() {
     .map((line, idx) => {
       const parts = line.split("|").map((s) => s.trim());
       const handle = parts[0] || "";
-      const clips = parts.find((p) => p.startsWith("clips=")) || "clips=auto";
+      const clips = parts.find((p) => p.startsWith("limit=")) || "limit=auto";
       const focus =
-        parts.find((p) => p.startsWith("focus=")) || "focus=general";
+        parts
+          .slice(1)
+          .filter((p) => !p.startsWith("limit="))
+          .join(" | ") || "Defaults";
 
       return `
           <tr class="hover:bg-white/[0.02] transition-colors">
-            <td class="p-3 font-mono font-medium text-white">${handle}</td>
-            <td class="p-3 text-slate-400 font-mono tabular">${clips}</td>
-            <td class="p-3 text-slate-400 font-mono">${focus}</td>
+            <td class="p-3 font-mono font-medium text-white">${escapeHtml(handle)}</td>
+            <td class="p-3 text-slate-400 font-mono tabular">${escapeHtml(clips)}</td>
+            <td class="p-3 text-slate-400 font-mono">${escapeHtml(focus)}</td>
             <td class="p-3 text-right">
-              <button onclick="removeChannel(${idx})" class="text-red-400 hover:text-red-300 font-mono text-[11px]">
+              <button onclick="removeChannel(${idx})" aria-label="Remove ${escapeHtml(handle)}" class="text-red-400 hover:text-red-300 font-mono text-[11px]">
                 Remove
               </button>
             </td>
@@ -991,206 +1526,196 @@ function renderChannelsTable() {
 }
 
 function addNewChannel() {
+  if (!channelsLoaded || channelsSaving) return;
   const input = document.getElementById("new-channel-input");
   const val = input.value.trim();
-  if (!val) return;
+  if (!val) {
+    input.focus();
+    setChannelsStatus("Enter a YouTube channel handle or URL.", "error");
+    return;
+  }
+  if (cachedChannels.includes(val)) {
+    setChannelsStatus("This channel is already in the list.", "error");
+    return;
+  }
   cachedChannels.push(val);
   input.value = "";
   renderChannelsTable();
+  setChannelsStatus(
+    "Unsaved changes. Save channels to keep this list.",
+    "unsaved",
+  );
+  input.focus();
 }
 
 function removeChannel(idx) {
+  if (!channelsLoaded || channelsSaving) return;
   cachedChannels.splice(idx, 1);
   renderChannelsTable();
+  setChannelsStatus(
+    channelsDirty()
+      ? "Unsaved changes. Save channels to keep this list."
+      : "Channels are up to date.",
+    channelsDirty() ? "unsaved" : "idle",
+  );
 }
 
 async function saveActiveChannels() {
+  if (!channelsLoaded || channelsSaving || !channelsDirty()) return;
+  channelsSaving = true;
+  setChannelsStatus("Saving channels…", "saving");
   try {
-    await fetch("/api/channels", {
+    const res = await fetch("/api/channels", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ channels: cachedChannels }),
+      signal: AbortSignal.timeout(15000),
     });
+    if (!res.ok) throw new Error("Channel save failed");
+    savedChannels = JSON.stringify(cachedChannels);
+    channelsSaving = false;
+    setChannelsStatus("Channels saved.", "saved");
     appendConsoleLog("[channels] Successfully saved channels.txt");
   } catch (e) {
-    console.error(e);
+    channelsSaving = false;
+    setChannelsStatus(
+      "Couldn’t save channels. Your edits are still here. Try Save channels again.",
+      "error",
+    );
   }
 }
+
+window.addEventListener("beforeunload", (event) => {
+  if (channelsDirty() || envDirty) {
+    event.preventDefault();
+    event.returnValue = "";
+  }
+});
 
 // ==================== GALLERY & OUTPUTS ====================
+
 async function loadOutputs() {
+  if (outputsLoading) return;
+  outputsLoading = true;
+  const status = document.getElementById("outputs-status");
+  status.textContent = "Loading clips…";
+  status.dataset.state = "loading";
+  document.getElementById("outputs-refresh-btn").disabled = true;
+  document.getElementById("outputs-retry-btn").hidden = true;
   try {
-    const res = await fetch("/api/outputs");
-    const data = await res.json();
-    const files = data.files || [];
-    const folders = data.folders || [];
-    document.getElementById("gallery-count").innerText = files.length;
-
-    const container =
-      document.getElementById("outputs-grid") ||
-      document.getElementById("outputs-container");
-    if (!container) return;
-
-    if (files.length === 0) {
-      container.innerHTML = `
-            <div class="p-12 border border-white/[0.08] bg-[#191b18] rounded-xl text-center space-y-3">
-              <div class="w-10 h-10 rounded-full bg-[#242721] border border-white/10 flex items-center justify-center mx-auto text-slate-400">
-                <i data-lucide="video" class="w-5 h-5"></i>
-              </div>
-              <div>
-                <p class="text-sm font-medium text-slate-300">No rendered video clips in output/ yet</p>
-                <p class="text-xs text-slate-500 mt-1 font-mono">Use "Export 9:16" or "Run pipeline" to generate high-retention vertical reels.</p>
-              </div>
-            </div>
-          `;
-      lucide.createIcons();
-      return;
-    }
-
-    const tokenParam = window.__HOOKY_TOKEN__
-      ? `?token=${encodeURIComponent(window.__HOOKY_TOKEN__)}`
-      : "";
-
-    // Render foldered collections grouped by source video title
-    if (folders.length > 0) {
-      container.innerHTML = folders
-        .map((folder) => {
-          const folderFiles = folder.files || [];
-          return `
-              <div class="border border-white/[0.08] bg-[#141519] rounded-xl overflow-hidden transition-all">
-                <div class="px-5 py-3.5 bg-[#191b18] border-b border-white/[0.06] flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                  <div class="flex items-center gap-3">
-                    <div class="w-8 h-8 rounded-lg bg-[#242721] border border-white/10 flex items-center justify-center text-[#ffd166] shrink-0">
-                      <i data-lucide="folder-video" class="w-4 h-4"></i>
-                    </div>
-                    <div>
-                      <h3 class="text-sm font-medium text-white tracking-tight leading-snug">${folder.name}</h3>
-                      <p class="text-[11px] text-slate-400 font-mono">Source collection • ${folderFiles.length} ${folderFiles.length === 1 ? "reel" : "reels"}</p>
-                    </div>
-                  </div>
-                  <span class="self-start sm:self-auto text-[11px] font-mono px-2.5 py-0.5 bg-white/5 text-slate-300 border border-white/10 rounded-full tabular">
-                    ${folderFiles.length} ${folderFiles.length === 1 ? "clip" : "clips"}
-                  </span>
-                </div>
-
-                <div class="p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  ${folderFiles
-                    .map((f) => {
-                      const rankMatch = f.name.match(
-                        /reel_rank(\d+)_(\d+)pts/i,
-                      );
-                      const badgeHTML = rankMatch
-                        ? `<span class="text-[10px] font-mono px-2 py-0.5 bg-[#ffd166]/10 text-[#ffd166] border border-[#ffd166]/20 rounded font-semibold">Rank #${parseInt(rankMatch[1])} • ${rankMatch[2]}pts</span>`
-                        : `<span class="text-[10px] font-mono px-2 py-0.5 bg-white/5 text-slate-300 border border-white/10 rounded font-medium">1080×1920 MP4</span>`;
-
-                      const cleanDisplayName =
-                        f.name
-                          .replace(/^reel_rank\d+_\d+pts_/, "")
-                          .replace(/^reel_/, "")
-                          .replace(/_\d+\.mp4$/, "")
-                          .replace(/_/g, " ") || f.name;
-                      const encodedUrl = `/api/outputs/${String(f.rel_path).replace(/\\/g, "/").split("/").map(encodeURIComponent).join("/")}${tokenParam}`;
-
-                      return `
-                      <div class="p-4 bg-[#191b18] border border-white/[0.08] hover:border-white/20 rounded-lg transition-all space-y-3 font-mono flex flex-col justify-between">
-                        <div class="space-y-2">
-                          <div class="flex items-center justify-between gap-2">
-                            ${badgeHTML}
-                            <span class="text-[11px] text-slate-400 tabular">${f.size_mb} MB</span>
-                          </div>
-                          <div>
-                            <h4 class="font-medium text-white text-xs truncate max-w-full font-sans capitalize" title="${f.name}">${cleanDisplayName}</h4>
-                            <p class="text-[10px] text-slate-500 mt-0.5">${new Date(f.mtime * 1000).toLocaleString()}</p>
-                          </div>
-                        </div>
-                        <div class="flex items-center gap-2 pt-2 border-t border-white/[0.06]">
-                          <button
-                            onclick="playOutputVideo('${String(f.rel_path).replace(/\\/g, "/").replace(/'/g, "\\'")}', '${cleanDisplayName.replace(/'/g, "\\'")}')"
-                            class="flex-1 py-1.5 bg-[#242721] hover:bg-[#2b2e38] text-white border border-white/10 rounded text-xs font-medium flex items-center justify-center gap-1.5 transition-all"
-                          >
-                            <i data-lucide="play" class="w-3.5 h-3.5 text-[#d2fa69]"></i>
-                            <span>Watch</span>
-                          </button>
-                          <a
-                            href="${encodedUrl}"
-                            download
-                            class="px-3 py-1.5 bg-[#101110] text-slate-300 hover:text-white border border-white/[0.08] rounded text-xs transition-all"
-                            title="Download MP4"
-                          >
-                            <i data-lucide="download" class="w-3.5 h-3.5 inline"></i>
-                          </a>
-                        </div>
-                      </div>
-                    `;
-                    })
-                    .join("")}
-                </div>
-              </div>
-            `;
-        })
-        .join("");
+    const data = await apiJson("/api/outputs");
+    if (!Array.isArray(data.files)) throw new Error("Invalid gallery response");
+    const files = data.files;
+    document.getElementById("gallery-count").textContent = files.length;
+    const container = document.getElementById("outputs-grid");
+    container.replaceChildren();
+    if (!files.length) {
+      const empty = document.createElement("p");
+      empty.textContent =
+        "No clips yet. Detect hooks, select a moment, and export your first clip.";
+      container.append(empty);
     } else {
-      container.innerHTML = files
-        .map((f) => {
-          const cleanDisplayName =
-            f.name
-              .replace(/^reel_/, "")
-              .replace(/_\d+\.mp4$/, "")
-              .replace(/_/g, " ") || f.name;
-          const encodedUrl = `/api/outputs/${String(f.rel_path).replace(/\\/g, "/").split("/").map(encodeURIComponent).join("/")}${tokenParam}`;
-          return `
-              <div class="p-4 bg-[#191b18] border border-white/[0.08] hover:border-white/20 rounded-lg transition-all space-y-3 font-mono">
-                <div class="flex items-center justify-between">
-                  <span class="text-xs px-2 py-0.5 bg-white/5 text-slate-300 border border-white/10 rounded font-medium">1080×1920 MP4</span>
-                  <span class="text-xs text-slate-400 tabular">${f.size_mb} MB</span>
-                </div>
-                <div>
-                  <h4 class="font-medium text-white text-xs truncate max-w-full font-sans capitalize" title="${f.name}">${cleanDisplayName}</h4>
-                  <p class="text-[11px] text-slate-500 mt-0.5">${new Date(f.mtime * 1000).toLocaleString()}</p>
-                </div>
-                <div class="flex items-center gap-2 pt-2 border-t border-white/[0.06]">
-                  <button
-                    onclick="playOutputVideo('${String(f.rel_path).replace(/\\/g, "/").replace(/'/g, "\\'")}', '${cleanDisplayName.replace(/'/g, "\\'")}')"
-                    class="flex-1 py-1.5 bg-[#242721] hover:bg-[#2b2e38] text-white border border-white/10 rounded text-xs font-medium flex items-center justify-center gap-1.5 transition-all"
-                  >
-                    <i data-lucide="play" class="w-3.5 h-3.5 text-[#d2fa69]"></i>
-                    <span>Watch</span>
-                  </button>
-                  <a
-                    href="${encodedUrl}"
-                    download
-                    class="px-3 py-1.5 bg-[#101110] text-slate-300 hover:text-white border border-white/[0.08] rounded text-xs transition-all"
-                  >
-                    <i data-lucide="download" class="w-3.5 h-3.5 inline"></i>
-                  </a>
-                </div>
-              </div>
-            `;
-        })
-        .join("");
+      const folders =
+        Array.isArray(data.folders) && data.folders.length
+          ? data.folders
+          : [{ name: "Your clips", files }];
+      folders.forEach((folder) => {
+        const group = document.createElement("section"),
+          heading = document.createElement("h3"),
+          grid = document.createElement("div");
+        group.className = "output-collection";
+        heading.textContent = folder.name;
+        grid.className = "output-card-grid";
+        (folder.files || []).forEach((file) => {
+          const card = document.createElement("article"),
+            name = document.createElement("h4"),
+            meta = document.createElement("p"),
+            actions = document.createElement("div"),
+            watch = document.createElement("button"),
+            download = document.createElement("a"),
+            outputUrl = outputVideoUrl(file.rel_path, file.url);
+          card.className = "output-card";
+          name.textContent = file.name;
+          meta.textContent =
+            String(file.size_mb) +
+            " MB · " +
+            new Date(file.mtime * 1000).toLocaleString();
+          watch.textContent = "Watch";
+          watch.onclick = () =>
+            playOutputVideo(file.rel_path, file.name, outputUrl);
+          download.textContent = "Download MP4";
+          download.href = outputUrl;
+          download.download = "";
+          actions.className = "output-actions";
+          actions.append(watch, download);
+          card.append(name, meta, actions);
+          grid.append(card);
+        });
+        group.append(heading, grid);
+        container.append(group);
+      });
     }
-    lucide.createIcons();
-  } catch (e) {
-    console.error(e);
+    status.textContent = files.length
+      ? files.length + " exported " + (files.length === 1 ? "clip" : "clips")
+      : "Gallery loaded.";
+    status.dataset.state = "ready";
+    if (files.length) {
+      document.getElementById("setup-export").textContent =
+        "First clip exported";
+    }
+  } catch (error) {
+    status.textContent =
+      "Couldn’t load clips. " +
+      error.message +
+      " Retry loading; previously loaded clips remain here.";
+    status.dataset.state = "error";
+    document.getElementById("outputs-retry-btn").hidden = false;
+  } finally {
+    outputsLoading = false;
+    document.getElementById("outputs-refresh-btn").disabled = false;
   }
 }
 
-function playOutputVideo(filepath, title) {
+function outputVideoUrl(filepath, outputUrl) {
+  const encodedPath = String(filepath)
+    .replace(/\\/g, "/")
+    .split("/")
+    .map(encodeURIComponent)
+    .join("/");
+  const url = new URL(
+    outputUrl || "/api/outputs/" + encodedPath,
+    window.location.href,
+  );
+  if (
+    url.origin !== window.location.origin ||
+    !url.pathname.startsWith("/api/outputs/") ||
+    url.username ||
+    url.password
+  )
+    throw new Error("Invalid clip URL");
+  if (window.__HOOKY_TOKEN__)
+    url.searchParams.set("token", window.__HOOKY_TOKEN__);
+  return url.pathname + url.search;
+}
+
+function playOutputVideo(filepath, title, outputUrl) {
+  const src = outputVideoUrl(filepath, outputUrl);
+  outputPlayerTrigger = document.activeElement;
   const box = document.getElementById("active-video-player-box");
   box.classList.remove("hidden");
   document.getElementById("active-playing-title").innerText = title || filepath;
 
   const player = document.getElementById("html5-video-player");
   const srcElem = document.getElementById("video-source-elem");
-  const tokenParam = window.__HOOKY_TOKEN__
-    ? `?token=${encodeURIComponent(window.__HOOKY_TOKEN__)}`
-    : "";
-  const cleanPath = String(filepath).replace(/\\/g, "/");
-  const encodedPath = cleanPath.split("/").map(encodeURIComponent).join("/");
-  srcElem.src = `/api/outputs/${encodedPath}${tokenParam}`;
+  srcElem.src = src;
   player.load();
   player.play().catch(() => {});
-  box.scrollIntoView({ behavior: "smooth" });
+  box.scrollIntoView({
+    behavior: matchMedia("(prefers-reduced-motion: reduce)").matches
+      ? "instant"
+      : "smooth",
+  });
+  document.getElementById("gallery-close-btn").focus();
 }
 
 function closeActivePlayer() {
@@ -1198,13 +1723,26 @@ function closeActivePlayer() {
   box.classList.add("hidden");
   const player = document.getElementById("html5-video-player");
   player.pause();
+  if (outputPlayerTrigger?.isConnected) outputPlayerTrigger.focus();
+  outputPlayerTrigger = null;
 }
 
 // ==================== SYSTEM DOCTOR ====================
 async function loadDoctorReport() {
   try {
-    const res = await fetch("/api/doctor");
-    const data = await res.json();
+    document.getElementById("doctor-status").textContent =
+      "Checking system health…";
+    const data = await apiJson("/api/doctor");
+    if (!Array.isArray(data.checks))
+      throw new Error("Invalid system health response");
+    doctorReady = data.checks.every(
+      (check) =>
+        check.ok || check.required === false || /key|gemini/i.test(check.name),
+    );
+    document.getElementById("doctor-status").textContent = doctorReady
+      ? "Local checks complete. Configure an API key in Settings, then analyze a source."
+      : "Resolve the failed required checks, then run system health again.";
+    updateOnboarding();
     const container = document.getElementById("doctor-checks-container");
     if (!container) return;
 
@@ -1218,17 +1756,18 @@ async function loadDoctorReport() {
         (c) => `
           <div class="p-3 bg-[#191b18] border border-white/[0.08] rounded-md flex items-center justify-between text-xs font-mono">
             <div class="flex items-center gap-2">
-              <span class="${c.ok ? "text-[#d2fa69]" : "text-red-400"} font-medium">
-                ${c.ok ? "✓ pass" : "✗ fail"}
+              <span class="${c.ok ? "text-[#d2fa69]" : c.required === false ? "text-slate-400" : "text-red-400"} font-medium">
+                ${c.ok ? "✓ pass" : c.required === false ? "optional" : "✗ fail"}
               </span>
-              <span class="text-white font-medium">${c.name}</span>
+              <span class="text-white font-medium">${escapeHtml(c.name)}</span>
             </div>
-            <span class="text-slate-400 text-[11px] truncate max-w-[200px]" title="${c.detail}">${c.detail}</span>
+            <span class="text-slate-400 text-[11px] truncate max-w-[200px]" title="${escapeHtml(c.detail)}">${escapeHtml(c.detail)}</span>
           </div>
         `,
       )
       .join("");
   } catch (e) {
-    console.error(e);
+    document.getElementById("doctor-status").textContent =
+      "Couldn’t check system health. Retry checks. " + e.message;
   }
 }

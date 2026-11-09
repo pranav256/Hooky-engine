@@ -168,9 +168,6 @@ def _file_lock(path: Path):
     with path.open("a+b") as handle:
         if os.name == "nt":
             import msvcrt
-            if handle.tell() == 0:
-                handle.write(b"\0")
-                handle.flush()
             handle.seek(0)
             msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
         else:

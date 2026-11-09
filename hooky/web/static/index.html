@@ -97,13 +97,37 @@
       <section id="view-studio" class="space-y-6" aria-label="Clip studio">
         <div class="workspace-heading">
           <div>
-            <span class="studio-overline">MAKE THE MOST OF WHAT YOU MAKE.</span>
-            <h1>The good parts<span>.</span></h1>
+            <h1>Clip studio<span>.</span></h1>
             <p>Start with a video. Find a moment. Make it yours.</p>
           </div>
           <span class="workspace-format"
             ><i data-lucide="scan-line"></i>9:16 / VERTICAL VIDEO</span
           >
+        </div>
+        <div id="first-run" class="first-run">
+          <span>First clip</span
+          ><button id="setup-health" onclick="switchTab('doctor')">
+            Check system health
+          </button>
+          <button id="setup-key" onclick="switchTab('settings')">
+            Configure API key
+          </button>
+          <button
+            id="setup-analysis"
+            onclick="
+              switchTab('studio');
+              document.getElementById('source-url').focus();
+            "
+          >
+            Analyze your first source
+          </button>
+          <span id="setup-export">Export a selected moment</span
+          ><button
+            onclick="dismissOnboarding()"
+            aria-label="Dismiss first clip checklist"
+          >
+            Dismiss
+          </button>
         </div>
         <div id="studio-alert" role="status" class="studio-alert hidden"></div>
 
@@ -161,6 +185,7 @@
             </div>
           </div>
 
+          <p id="source-state" role="status" class="source-state"></p>
           <!-- Row 2: Intelligent Auto-Recommendation & Override Controls -->
           <div
             class="studio-overrides pt-3 border-t border-white/[0.06] flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs"
@@ -279,7 +304,9 @@
                   data-lucide="loader"
                   class="w-4 h-4 animate-spin text-[#d2fa69]"
                 ></i>
-                <span id="stepper-status-text">Processing engine task...</span>
+                <span id="stepper-status-text" role="status" aria-live="polite"
+                  >Processing engine task...</span
+                >
               </div>
               <span
                 id="stepper-percent"
@@ -319,6 +346,13 @@
               >
             </div>
 
+            <div class="job-actions">
+              <button id="job-cancel-btn" hidden onclick="cancelJob()">
+                Cancel job</button
+              ><button id="job-retry-btn" hidden onclick="pollJobs()">
+                Retry status
+              </button>
+            </div>
             <!-- Live Console Output Box -->
             <div
               id="live-engine-console"
@@ -333,6 +367,16 @@
           </div>
         </div>
 
+        <details class="jobs-history">
+          <summary>Job history</summary>
+          <div class="panel-feedback">
+            <p id="jobs-status" role="status"></p>
+            <button id="jobs-retry-btn" hidden onclick="loadJobs()">
+              Retry history
+            </button>
+          </div>
+          <ul id="jobs-list"></ul>
+        </details>
         <!-- ==================== SPLIT WORKBENCH ==================== -->
         <div
           class="studio-workbench grid grid-cols-1 lg:grid-cols-12 gap-6 items-start"
@@ -369,7 +413,7 @@
               >
                 <div class="flex items-center gap-2">
                   <span class="font-medium text-sm text-white"
-                    >The preview</span
+                    >Source and style preview</span
                   >
                   <span
                     id="preview-mode-tag"
@@ -385,6 +429,7 @@
                 >
                   <button
                     id="preview-tab-player"
+                    aria-pressed="true"
                     onclick="switchPreviewMode('player')"
                     class="px-3 py-1 text-slate-400 hover:text-white rounded transition-all"
                   >
@@ -392,6 +437,7 @@
                   </button>
                   <button
                     id="preview-tab-canvas"
+                    aria-pressed="false"
                     onclick="switchPreviewMode('canvas')"
                     class="px-3 py-1 bg-[#242721] text-white font-medium rounded border border-white/10 transition-all"
                   >
@@ -516,6 +562,20 @@
                 </div>
               </div>
 
+              <div class="preview-controls">
+                <p>
+                  Source playback and caption styling preview. Export to see the
+                  finished clip.
+                </p>
+                <button
+                  id="preview-play-btn"
+                  type="button"
+                  aria-pressed="false"
+                  onclick="togglePreviewPlayback()"
+                >
+                  Play captions
+                </button>
+              </div>
               <!-- Dialogue Transcript Inspector -->
               <div
                 class="p-3.5 bg-[#101110] border border-white/[0.08] rounded-lg space-y-2"
@@ -538,6 +598,30 @@
                 </div>
               </div>
 
+              <div class="timing-controls">
+                <label for="timing-start"
+                  >Start (seconds)<input
+                    id="timing-start"
+                    type="number"
+                    min="0"
+                    step="0.5"
+                    onchange="applyTiming()"
+                    aria-describedby="timing-error"
+                /></label>
+                <label for="timing-end"
+                  >End (seconds)<input
+                    id="timing-end"
+                    type="number"
+                    min="0"
+                    step="0.5"
+                    onchange="applyTiming()"
+                    aria-describedby="timing-error"
+                /></label>
+                <button type="button" onclick="applyTiming()">
+                  Apply timing
+                </button>
+                <p id="timing-error" role="alert"></p>
+              </div>
               <!-- Fine-Tune Timing Nudge Bar -->
               <div
                 class="p-2.5 bg-[#101110] border border-white/[0.08] rounded-lg flex items-center justify-between text-xs"
@@ -589,7 +673,7 @@
                 class="text-base font-semibold text-white flex items-center gap-2"
               >
                 <i data-lucide="sliders" class="w-4 h-4 text-[#d2fa69]"></i>
-                <span>Your creative defaults</span>
+                <span>Settings</span>
               </h2>
               <p class="text-xs text-slate-400 mt-1">
                 Manage API keys, model fallbacks, output clip density, and
@@ -597,6 +681,8 @@
               </p>
             </div>
             <button
+              id="env-save-btn"
+              disabled
               onclick="saveEnvForm()"
               class="brutal-btn-acid px-4 py-2 text-xs flex items-center gap-2"
             >
@@ -605,6 +691,13 @@
             </button>
           </div>
 
+          <div class="panel-feedback">
+            <button id="env-retry-btn" hidden onclick="loadEnvConfig()">
+              Retry settings</button
+            ><button id="env-discard-btn" hidden onclick="loadEnvConfig(true)">
+              Discard edits and reload
+            </button>
+          </div>
           <!-- Settings Tabs: Visual Form vs Raw Editor -->
           <div
             class="flex items-center gap-2 border-b border-white/[0.08] pb-3 text-xs font-mono"
@@ -612,6 +705,7 @@
             <button
               onclick="switchEnvTab('form')"
               id="env-tab-form"
+              aria-pressed="true"
               class="px-3 py-1.5 bg-[#242721] text-white font-medium rounded-md border border-white/10 transition-all"
             >
               Visual form
@@ -619,6 +713,7 @@
             <button
               onclick="switchEnvTab('raw')"
               id="env-tab-raw"
+              aria-pressed="false"
               class="px-3 py-1.5 text-slate-400 hover:text-white rounded-md transition-all"
             >
               Raw .env editor
@@ -632,7 +727,9 @@
           >
             <!-- Gemini API Key -->
             <div class="space-y-1.5 md:col-span-2">
-              <label class="text-slate-300 font-medium block"
+              <label
+                for="env-gemini-key"
+                class="text-slate-300 font-medium block"
                 >Gemini API key</label
               >
               <div class="relative">
@@ -658,13 +755,16 @@
 
             <!-- Gemini Primary Model -->
             <div class="space-y-1.5">
-              <label class="text-slate-300 font-medium block"
+              <label
+                for="env-gemini-model"
+                class="text-slate-300 font-medium block"
                 >AI model</label
               >
               <select
                 id="env-gemini-model"
                 class="w-full bg-[#101110] border border-white/[0.08] rounded-md px-3 py-2 text-xs text-white focus:outline-none focus:border-white/20"
               >
+                <option value="" disabled>Use engine default</option>
                 <option value="gemini-3.8-flash">
                   gemini-3.8-flash (Primary active flash)
                 </option>
@@ -679,13 +779,16 @@
 
             <!-- Default Subtitle Style -->
             <div class="space-y-1.5">
-              <label class="text-slate-300 font-medium block"
+              <label
+                for="env-sub-style"
+                class="text-slate-300 font-medium block"
                 >Default captions</label
               >
               <select
                 id="env-sub-style"
                 class="w-full bg-[#101110] border border-white/[0.08] rounded-md px-3 py-2 text-xs text-white focus:outline-none focus:border-white/20"
               >
+                <option value="" disabled>Use engine default</option>
                 <option value="gold">Warm titanium (gold)</option>
                 <option value="hormozi">Hormozi classic</option>
                 <option value="clean">Clean studio</option>
@@ -697,7 +800,9 @@
 
             <!-- Fallback Models Chain -->
             <div class="space-y-1.5 md:col-span-2">
-              <label class="text-slate-300 font-medium block"
+              <label
+                for="env-gemini-fallbacks"
+                class="text-slate-300 font-medium block"
                 >Fallback models</label
               >
               <input
@@ -713,11 +818,14 @@
 
             <!-- Auto Clip Density -->
             <div class="space-y-1.5">
-              <label class="text-slate-300 font-medium block"
+              <label
+                for="env-density-minutes"
+                class="text-slate-300 font-medium block"
                 >Clip density (minutes)</label
               >
               <input
                 id="env-density-minutes"
+                placeholder="Engine default"
                 type="number"
                 min="2"
                 max="60"
@@ -730,11 +838,14 @@
 
             <!-- Hardware Threads -->
             <div class="space-y-1.5">
-              <label class="text-slate-300 font-medium block"
+              <label
+                for="env-ffmpeg-threads"
+                class="text-slate-300 font-medium block"
                 >Rendering threads</label
               >
               <input
                 id="env-ffmpeg-threads"
+                placeholder="Engine default"
                 type="number"
                 min="1"
                 max="32"
@@ -750,6 +861,7 @@
           <div id="env-raw-view" class="hidden space-y-3">
             <textarea
               id="env-raw-textarea"
+              aria-label="Raw environment configuration"
               rows="16"
               class="w-full bg-[#101110] border border-white/[0.08] rounded-lg p-4 font-mono text-xs text-slate-200 focus:outline-none focus:border-white/20 leading-relaxed"
             ></textarea>
@@ -757,6 +869,8 @@
 
           <div
             id="env-status-alert"
+            role="status"
+            aria-live="polite"
             class="hidden p-3 bg-emerald-500/10 border border-emerald-500/20 text-[#d2fa69] text-xs font-mono rounded-md"
           >
             Environment configuration saved successfully and reloaded into
@@ -776,19 +890,34 @@
                 class="text-base font-semibold text-white flex items-center gap-2"
               >
                 <i data-lucide="radio" class="w-4 h-4 text-[#d2fa69]"></i>
-                <span>Let the next video find you</span>
+                <span>Channel radar</span>
               </h2>
               <p class="text-xs text-slate-400 mt-1">
-                Autonomous YouTube channel radar saved in
-                <code class="text-slate-300 font-mono">channels.txt</code>
+                Choose YouTube channels for Hooky to scan for new videos.
               </p>
             </div>
             <button
+              id="channels-save-btn"
+              disabled
               onclick="saveActiveChannels()"
               class="brutal-btn-acid px-4 py-2 text-xs flex items-center gap-2"
             >
               <i data-lucide="save" class="w-3.5 h-3.5"></i>
-              <span>Save channels</span>
+              <span id="channels-save-label">Save channels</span>
+            </button>
+          </div>
+
+          <div class="channels-feedback">
+            <p id="channels-status" role="status" aria-live="polite">
+              Loading channels…
+            </p>
+            <button
+              id="channels-retry-btn"
+              type="button"
+              hidden
+              onclick="loadChannels()"
+            >
+              Retry loading
             </button>
           </div>
 
@@ -797,12 +926,15 @@
           >
             <input
               id="new-channel-input"
+              disabled
               aria-label="YouTube channel handle or URL"
               type="text"
-              placeholder="@CreatorHandle | clips=2 | focus=high energy moments"
+              placeholder="@creator | limit=2 | min_views=10000 | scan=20"
               class="flex-1 bg-[#191b18] border border-white/[0.08] rounded-md px-3.5 py-2 text-xs text-white placeholder-slate-500 font-mono focus:outline-none focus:border-white/20"
             />
             <button
+              id="channels-add-btn"
+              disabled
               onclick="addNewChannel()"
               class="px-4 py-2 bg-[#242721] hover:bg-[#2b2e38] text-white border border-white/10 rounded-md text-xs font-mono font-medium transition-all"
             >
@@ -817,8 +949,8 @@
                   class="border-b border-white/[0.08] text-slate-400 text-[11px]"
                 >
                   <th class="p-3">Handle / URL</th>
-                  <th class="p-3">Clips desired</th>
-                  <th class="p-3">Editing focus</th>
+                  <th class="p-3">Video limit</th>
+                  <th class="p-3">Scan options</th>
                   <th class="p-3 text-right">Action</th>
                 </tr>
               </thead>
@@ -842,7 +974,7 @@
                 class="text-base font-semibold text-white flex items-center gap-2"
               >
                 <i data-lucide="folder" class="w-4 h-4 text-[#d2fa69]"></i>
-                <span>A home for your good moments</span>
+                <span>Your clips</span>
               </h2>
               <p class="text-xs text-slate-400 mt-1">
                 Rendered MP4 video clips saved in
@@ -850,6 +982,7 @@
               </p>
             </div>
             <button
+              id="outputs-refresh-btn"
               onclick="loadOutputs()"
               class="px-3 py-1.5 bg-[#242721] hover:bg-[#2b2e38] text-slate-300 hover:text-white border border-white/10 rounded-md text-xs font-mono flex items-center gap-1.5 transition-all"
             >
@@ -858,6 +991,14 @@
             </button>
           </div>
 
+          <div class="panel-feedback">
+            <p id="outputs-status" role="status" aria-live="polite">
+              Loading clips…
+            </p>
+            <button id="outputs-retry-btn" hidden onclick="loadOutputs()">
+              Retry gallery
+            </button>
+          </div>
           <!-- Video Player Modal / Active Video Card -->
           <div
             id="active-video-player-box"
@@ -870,6 +1011,7 @@
                 >Now playing</span
               >
               <button
+                id="gallery-close-btn"
                 onclick="closeActivePlayer()"
                 class="text-slate-400 hover:text-white text-xs font-mono"
               >
@@ -905,7 +1047,7 @@
               class="text-base font-semibold text-white flex items-center gap-2"
             >
               <i data-lucide="activity" class="w-4 h-4 text-[#d2fa69]"></i>
-              <span>Keep the engine running</span>
+              <span>System health</span>
             </h2>
             <p class="text-xs text-slate-400 mt-1">
               Diagnostic status across FFmpeg, Whisper, hardware acceleration,
@@ -913,6 +1055,13 @@
             </p>
           </div>
 
+          <div class="panel-feedback">
+            <p id="doctor-status" role="status" aria-live="polite">
+              Checking system health…
+            </p>
+            <button onclick="loadDoctorReport()">Retry checks</button
+            ><button onclick="switchTab('settings')">Configure API key</button>
+          </div>
           <div
             id="doctor-checks-container"
             class="grid grid-cols-1 md:grid-cols-2 gap-3 font-mono"

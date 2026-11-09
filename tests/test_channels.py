@@ -463,6 +463,53 @@ def test_concurrent_scans_recheck_cap_inside_commit_lock(tmp_path, monkeypatch):
     assert set(channels._load_history()) == {"fresh"}
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows byte-range locking")
+def test_empty_lock_file_serializes_two_handles_without_initialization_write(tmp_path, monkeypatch):
+    lock = tmp_path / "empty.lock"
+    role = threading.local()
+    contender_opened, owner_locked = threading.Event(), threading.Event()
+    release_owner, contender_locked = threading.Event(), threading.Event()
+    original_open = Path.open
+
+    def both_open_before_lock(path, mode="r", *args, **kwargs):
+        handle = original_open(path, mode, *args, **kwargs)
+        if path == lock and mode == "a+b":
+            if role.name == "owner":
+                assert contender_opened.wait(5)
+            else:
+                contender_opened.set()
+                assert owner_locked.wait(5)
+        return handle
+
+    monkeypatch.setattr(Path, "open", both_open_before_lock)
+
+    def owner():
+        role.name = "owner"
+        with channels._file_lock(lock):
+            owner_locked.set()
+            assert release_owner.wait(5)
+
+    def contender():
+        role.name = "contender"
+        with channels._file_lock(lock):
+            contender_locked.set()
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        first = workers.submit(owner)
+        second = workers.submit(contender)
+        try:
+            assert owner_locked.wait(5)
+            assert lock.stat().st_size == 0
+            assert not contender_locked.wait(0.05)
+            assert not second.done()
+        finally:
+            release_owner.set()
+        first.result(timeout=5)
+        second.result(timeout=5)
+    assert contender_locked.is_set()
+    assert lock.exists() and lock.stat().st_size == 0
+
+
 def test_concurrent_history_saves_preserve_all_records():
     with ThreadPoolExecutor(max_workers=4) as workers:
         futures = [workers.submit(channels._save_history, {str(i): {"views": i}})

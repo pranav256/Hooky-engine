@@ -239,6 +239,17 @@ def yt_dlp_auth_opts(env: Mapping[str, str] | None = None) -> dict[str, object]:
     return _auth_options_from_env(os.environ if env is None else env)
 
 
+def yt_dlp_auth_args(env: Mapping[str, str] | None = None) -> list[str]:
+    """Use the same validated authentication settings in Studio subprocesses."""
+    values = os.environ if env is None else env
+    options = yt_dlp_auth_opts(values)
+    if "cookiefile" in options:
+        return ["--cookies", str(options["cookiefile"])]
+    if "cookiesfrombrowser" in options:
+        return ["--cookies-from-browser", values["YTDLP_COOKIES_FROM_BROWSER"]]
+    return []
+
+
 def check_youtube_access(url: str) -> bool:
     """Probe one URL without downloading and print an actionable diagnosis."""
     status = youtube_auth_status()
@@ -448,11 +459,6 @@ def _merge_info(base: dict | None, extra: dict | None) -> dict:
         if value not in (None, "", []) and (key not in merged or merged[key] in (None, "", [])):
             merged[key] = value
     return merged
-
-
-def _safe_stem(title: str, video_id: str) -> str:
-    stem = re.sub(r"[^\w\- ]", "", title or "").strip().replace(" ", "_")[:80]
-    return f"{stem or 'video'}_{video_id or 'x'}"
 
 
 def expand_and_download(entry: dict, limits: dict) -> tuple[list[dict], bool]:

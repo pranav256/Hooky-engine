@@ -61,21 +61,6 @@ def clamp(value: float, low: float, high: float) -> float:
 
 
 @lru_cache(maxsize=256)
-def _get_dimensions_cached(path: str, _mtime_ns: int, _size: int) -> tuple[int, int]:
-    result = subprocess.run([
-        "ffprobe", "-v", "error", "-select_streams", "v:0",
-        "-show_entries", "stream=width,height", "-of", "json", path,
-    ], capture_output=True, text=True, check=True)
-    stream = json.loads(result.stdout)["streams"][0]
-    return int(stream["width"]), int(stream["height"])
-
-
-def get_dimensions(path: Path) -> tuple[int, int]:
-    """Return (width, height) of the video's first stream."""
-    return _get_dimensions_cached(*_probe_key(path))
-
-
-@lru_cache(maxsize=256)
 def _has_audio_cached(path: str, _mtime_ns: int, _size: int) -> bool:
     result = subprocess.run([
         "ffprobe", "-v", "error", "-select_streams", "a:0",
@@ -87,13 +72,6 @@ def _has_audio_cached(path: str, _mtime_ns: int, _size: int) -> bool:
 def has_audio(path: Path) -> bool:
     """Return whether the video has at least one audio stream."""
     return _has_audio_cached(*_probe_key(path))
-
-
-def clear_probe_cache() -> None:
-    """Clear cached media probes (useful for long-running integrations/tests)."""
-    _get_duration_cached.cache_clear()
-    _get_dimensions_cached.cache_clear()
-    _has_audio_cached.cache_clear()
 
 
 def safe_duration_clamp(start: float, end: float, total: float) -> tuple[float, float]:

@@ -1,9 +1,40 @@
-"""Fast regression tests for subtitle timeline normalization."""
+"""Fast regression tests for subtitle timing and style rendering."""
 from hooky.core.subtitles import build_ass
 
 
 def dialogue(ass: str) -> list[str]:
     return [line for line in ass.splitlines() if line.startswith("Dialogue:")]
+
+
+def test_ass_has_word_timing_and_no_overlay_style() -> None:
+    ass = build_ass([
+        {"start": 0.2, "end": 0.6, "word": "hello"},
+        {"start": 0.7, "end": 1.1, "word": "world"},
+    ], 0.0, 2.0, "hormozi")
+
+    assert len(dialogue(ass)) == 1
+    assert r"{\k50}HELLO" in ass
+    assert r"{\k40}WORLD" in ass
+    assert "Style: Hook" not in ass
+
+
+def test_dynamic_auto_scaling_for_extra_wide_text() -> None:
+    ass = build_ass([
+        {"start": 0.0, "end": 1.0, "word": "PNEUMONOULTRAMICROSCOPICSILICOVOLCANOCONIOSIS"},
+    ], 0.0, 1.0, "hormozi")
+    assert r"{\fs" in ass
+
+
+def test_sub_font_size_and_max_words_env_overrides(monkeypatch) -> None:
+    monkeypatch.setenv("SUB_FONT_SIZE", "50")
+    monkeypatch.setenv("SUB_MAX_WORDS", "2")
+    ass = build_ass([
+        {"start": 0.0, "end": 0.5, "word": "one"},
+        {"start": 0.5, "end": 1.0, "word": "two"},
+        {"start": 1.0, "end": 1.5, "word": "three"},
+    ], 0.0, 2.0, "hormozi")
+    assert ",50," in ass
+    assert len(dialogue(ass)) == 2
 
 
 def test_stale_long_word_is_not_resurrected_in_later_clip() -> None:

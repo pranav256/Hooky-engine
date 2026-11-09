@@ -12,8 +12,8 @@ import sys
 from uuid import uuid4
 from pathlib import Path
 
-from ..config import CLIP_HEIGHT, CLIP_WIDTH, OUTPUT_DIR, TARGET_FPS
-from .lowspec import (AUDIO_BITRATE, AUDIO_NORMALIZATION, X264_CRF, X264_PRESET,
+from ..config import AUDIO_NORMALIZATION, CLIP_HEIGHT, CLIP_WIDTH, OUTPUT_DIR, TARGET_FPS
+from .lowspec import (AUDIO_BITRATE, X264_CRF, X264_PRESET,
                       lowspec_encode_args, lowspec_input_args)
 from .subtitles import build_ass, FONT_OVERRIDE, STYLES
 from .utils import format_timestamp, has_audio, vertical_crop_filter, get_duration

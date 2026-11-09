@@ -8,7 +8,6 @@ best-effort — the pipeline must never die because logging failed.
 from __future__ import annotations
 
 import datetime
-import sys
 from pathlib import Path
 
 from ..config import OUTPUT_DIR
@@ -45,12 +44,6 @@ def log(event: str, message: str, path: Path | None = None) -> None:
             fh.write(f"{ts}  {icon}  {message}\n")
     except Exception:
         pass  # logging must never break the pipeline
-
-
-def echo(event: str, message: str, path: Path | None = None) -> None:
-    """log() + print to the console in one call."""
-    print(f"[{event}] {message}")
-    log(event, message, path)
 
 
 def tail(n: int = 30, path: Path | None = None) -> str:

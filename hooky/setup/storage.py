@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 
 from .. import config
+from ..dotenv import parse_dotenv, quote_value as _env_quote, validate_settings
 from .settings import MANAGED_KEYS, SECRET_KEYS, path_value
 
 
@@ -46,25 +47,10 @@ def read_env(path: Path | None = None) -> dict[str, str]:
     except OSError as exc:
         raise SetupStorageError(f"Cannot read local configuration: {exc}") from exc
 
-    values: dict[str, str] = {}
-    for raw_line in lines:
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[7:].lstrip()
-        key, separator, raw_value = line.partition("=")
-        if not separator or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key.strip()):
-            continue
-        values[key.strip()] = config._dotenv_value(raw_value)
-    return values
-
-
-def _env_quote(value: str) -> str:
-    if re.fullmatch(r"[A-Za-z0-9_./:@+,-]*", value):
-        return value
-    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{escaped}"'
+    try:
+        return parse_dotenv("\n".join(lines))
+    except ValueError as exc:
+        raise SetupStorageError(str(exc)) from exc
 
 
 def _safe_chmod(path: Path) -> None:
@@ -77,6 +63,7 @@ def _safe_chmod(path: Path) -> None:
 
 def write_env(values: dict[str, str], path: Path | None = None) -> Path:
     """Atomically replace the dotenv file and restrict it to the owner."""
+    validate_settings(values)
     path = Path(path or config.ENV_FILE)
     lines = [
         "# Hooky local configuration. Keep this file private.",

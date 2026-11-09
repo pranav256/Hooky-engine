@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import re
+import os
 import sys
 import json
-import math
+import hashlib
 import time
 import shutil
 import asyncio
@@ -13,18 +14,12 @@ from typing import Any, Callable
 
 import json_repair
 
-from hooky.config import OUTPUT_DIR, PROJECT_ROOT
-from hooky.core.source_text import parse_caption_file, caption_words
+from hooky.config import OUTPUT_DIR
+from hooky.core.source_text import parse_caption_file
 from hooky.core.gemini import generate
+from hooky.core.downloader import yt_dlp_auth_args
 from hooky.core.utils import format_timestamp
-
-
-# Global in-memory analysis job state for real-time progress streaming
-ANALYSIS_JOBS: dict[str, dict[str, Any]] = {}
-
-
-def sys_executable() -> str:
-    return sys.executable
+from hooky.web.jobs import append_log
 
 
 def parse_timestamp_seconds(val: Any) -> float:
@@ -61,8 +56,8 @@ def get_video_metadata(url: str) -> dict[str, Any]:
     """Extract video title and duration using yt-dlp."""
     try:
         cmd = [
-            sys_executable(),
-            "-m", "yt_dlp",
+            sys.executable,
+            "-m", "yt_dlp", *yt_dlp_auth_args(),
             "--dump-json",
             "--no-playlist",
             "--",
@@ -104,11 +99,13 @@ async def download_captions(url: str, out_prefix: Path, progress_cb: Callable[[s
         progress_cb("[yt-dlp] Requesting YouTube timed caption tracks (English)...")
 
     cmd = [
-        sys_executable(),
-        "-m", "yt_dlp",
+        sys.executable,
+        "-m", "yt_dlp", *yt_dlp_auth_args(),
+        "--no-playlist",
         "--skip-download",
+        "--write-subs",
         "--write-auto-sub",
-        "--sub-lang", "en",
+        "--sub-lang", os.environ.get("SOURCE_SUB_LANGS", "en,en-US,en-GB"),
         "--sub-format", "vtt",
         "-o", str(out_prefix),
         "--",
@@ -127,10 +124,7 @@ async def download_captions(url: str, out_prefix: Path, progress_cb: Callable[[s
                 progress_cb(f"[yt-dlp] {line.strip()}")
 
     # Check for generated .en.vtt or .vtt and copy to normalized yt_{vid_id}.vtt
-    for candidate in [
-        out_prefix.parent / f"{out_prefix.name}.en.vtt",
-        out_prefix.parent / f"{out_prefix.name}.vtt",
-    ]:
+    for candidate in sorted(out_prefix.parent.glob(f"{out_prefix.name}*.vtt")):
         if candidate.exists() and candidate.stat().st_size > 0:
             if vid_id:
                 norm_path = out_prefix.parent / f"yt_{vid_id}.vtt"
@@ -159,7 +153,7 @@ def calculate_hook_density(cues: list[dict]) -> list[dict]:
         "secret", "never", "always", "leverage", "code", "investing", "advice",
         "rule", "game", "win", "lose", "cheat", "billion", "startup"
     }
-    
+
     scored_blocks = []
     chunk_size = 12
     step = 6
@@ -183,7 +177,7 @@ def calculate_hook_density(cues: list[dict]) -> list[dict]:
             matches.append("music")
         if ">>" in text:
             score += text.count(">>") * 5  # rapid speaker transitions
-            
+
         start = chunk[0].get("start", 0)
         end = chunk[-1].get("end", start + 30)
         if len(text.strip()) > 60:
@@ -206,7 +200,7 @@ def extract_ranked_scenes(
     max_clips: int = 10,
 ) -> list[dict]:
     """Extract and rank the highest-scoring non-overlapping scenes across the video.
-    
+
     Scenes are returned strictly sorted from best to worst (Rank #1, #2, etc.),
     each with a retention score, punchy title, dialogue cues, and precise start/end boundaries.
     """
@@ -309,27 +303,7 @@ def extract_ranked_scenes(
 def build_dynamic_hooks_from_cues(cues: list[dict], video_title: str, video_id: str, duration: float) -> list[dict]:
     """Dynamically derive 4 high-retention moments directly from timestamped transcript cues."""
     if not cues:
-        # Minimal synthetic fallback
-        return [
-            {
-                "id": "hook_1",
-                "start": 0.0,
-                "end": 30.0,
-                "start_fmt": "0:00",
-                "end_fmt": "0:30",
-                "duration": "30.0s",
-                "duration_seconds": 30.0,
-                "title": f"Opening Hook: {video_title[:32]}",
-                "hook_quote": f"Welcome to {video_title}",
-                "category": "Key Moment",
-                "retention_score": 95,
-                "reason": "Introductory hook capturing the core premise of the video.",
-                "boundary": "Natural speech pause aligned",
-                "words": ["WATCH", "THIS", "VIDEO", "HIGHLIGHT"],
-                "dialogue": [{"time": "0:00", "text": video_title}],
-                "youtube_embed_url": f"https://www.youtube-nocookie.com/embed/{video_id}?start=0&end=30&autoplay=1&enablejsapi=1",
-            }
-        ]
+        return []
 
     top_blocks = calculate_hook_density(cues)
     selected_blocks = []
@@ -362,13 +336,13 @@ def build_dynamic_hooks_from_cues(cues: list[dict], video_title: str, video_id: 
         s = round(float(b["start"]), 2)
         e = round(float(b["end"]), 2)
         dur = round(max(8.0, e - s), 1)
-        
+
         # Opening line as quote
         raw_text = b["text"].strip()
         first_sentence = raw_text.split(".")[0].split("?")[0].strip()
         if len(first_sentence) < 15 and len(raw_text) > 30:
             first_sentence = raw_text[:75]
-        
+
         # Clean title
         words_in_quote = [w for w in re.sub(r"[^\w\s]", "", first_sentence).split() if len(w) > 2]
         title = " ".join(words_in_quote[:5]).title() if words_in_quote else f"Highlight Moment #{idx + 1}"
@@ -405,94 +379,114 @@ def build_dynamic_hooks_from_cues(cues: list[dict], video_title: str, video_id: 
     return hooks
 
 
-async def run_analysis_pipeline(url: str, job_id: str) -> dict[str, Any]:
-    """Execute complete hook analysis pipeline with live step-by-step progress logging."""
-    cache_dir = OUTPUT_DIR / "web_cache"
+async def prepare_source(url: str, cache_dir: Path, job: dict, log=print) -> tuple[dict, list[dict]]:
+    """Fetch source text once, preserving captions and audio transcription fallback."""
     cache_dir.mkdir(parents=True, exist_ok=True)
-    cues: list[dict] = []
-    
-    def log(msg: str):
-        print(msg)
-        if job_id in ANALYSIS_JOBS:
-            ANALYSIS_JOBS[job_id]["logs"].append(f"[{time.strftime('%H:%M:%S')}] {msg}")
+    cues = []
+    # Step 1: Probe metadata
+    job["step"] = "Connecting to YouTube stream & fetching metadata..."
+    job["progress"] = 15
+    job["step_number"] = 1
+    log(f"[meta] Probing URL: {url}")
 
-    try:
-        # Step 1: Probe metadata
-        ANALYSIS_JOBS[job_id]["step"] = "Connecting to YouTube stream & fetching metadata..."
-        ANALYSIS_JOBS[job_id]["progress"] = 15
-        ANALYSIS_JOBS[job_id]["step_number"] = 1
-        log(f"[meta] Probing URL: {url}")
-        
-        meta = get_video_metadata(url)
-        title = meta["title"]
-        duration = meta["duration"]
-        video_id = meta.get("id") or extract_youtube_id(url)
-        dur_label = format_timestamp(duration) if duration > 0 else "Live/Unknown"
-        log(f"[meta] Title: '{title}' | Duration: {dur_label} | ID: {video_id or 'none'}")
+    meta = await asyncio.to_thread(get_video_metadata, url)
+    title = meta["title"]
+    duration = meta["duration"]
+    video_id = meta.get("id") or extract_youtube_id(url)
+    dur_label = format_timestamp(duration) if duration > 0 else "Live/Unknown"
+    log(f"[meta] Title: '{title}' | Duration: {dur_label} | ID: {video_id or 'none'}")
 
-        # Step 2: Download captions
-        ANALYSIS_JOBS[job_id]["step"] = "Downloading synchronized VTT caption tracks..."
-        ANALYSIS_JOBS[job_id]["progress"] = 35
-        ANALYSIS_JOBS[job_id]["step_number"] = 2
-        sub_prefix = cache_dir / (f"yt_{video_id}" if video_id else f"sub_{int(time.time())}")
-        vtt_path = await download_captions(url, sub_prefix, log)
+    # Step 2: Download captions
+    job["step"] = "Downloading synchronized VTT caption tracks..."
+    job["progress"] = 35
+    job["step_number"] = 2
+    identity = hashlib.sha256((url + os.environ.get("SOURCE_SUB_LANGS", "en,en-US,en-GB")).encode()).hexdigest()[:20]
+    sub_prefix = cache_dir / f"source_{identity}"
+    subtitle_source = os.environ.get("SUBTITLE_SOURCE", "auto").strip().lower()
+    vtt_path = await download_captions(url, sub_prefix, log) if subtitle_source != "whisper" else None
 
-        if vtt_path and vtt_path.exists():
-            cues = parse_caption_file(vtt_path)
-            log(f"[captions] Parsed {len(cues)} timed dialogue cues from {vtt_path.name}")
-        else:
-            log("[captions] Notice: Video has no YouTube captions track. Initiating fast audio transcription...")
-            audio_path = cache_dir / f"audio_{video_id}.m4a"
-            if not (audio_path.exists() and audio_path.stat().st_size > 10000):
-                dl_cmd = [
-                    sys_executable(), "-m", "yt_dlp",
-                    "-f", "ba/bestaudio",
-                    "-o", str(audio_path),
-                    "--",
-                    url,
-                ]
-                dl_proc = await asyncio.create_subprocess_exec(
-                    *dl_cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
-                )
-                await dl_proc.communicate()
+    if vtt_path and vtt_path.exists():
+        cues = parse_caption_file(vtt_path)
+        log(f"[captions] Parsed {len(cues)} timed dialogue cues from {vtt_path.name}")
+    if not cues and subtitle_source != "source":
+        log("[captions] Notice: Video has no YouTube captions track. Initiating fast audio transcription...")
+        audio_path = cache_dir / f"audio_{identity}.m4a"
+        if not (audio_path.exists() and audio_path.stat().st_size > 10000):
+            dl_cmd = [
+                sys.executable, "-m", "yt_dlp", *yt_dlp_auth_args(),
+                "--no-playlist",
+                "-f", "ba/bestaudio",
+                "-o", str(audio_path),
+                "--",
+                url,
+            ]
+            dl_proc = await asyncio.create_subprocess_exec(
+                *dl_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            _, error = await dl_proc.communicate()
+            if dl_proc.returncode != 0:
+                raise RuntimeError(f"Audio download failed: {error.decode('utf-8', errors='replace')[-500:]}")
 
-            if audio_path.exists() and audio_path.stat().st_size > 10000:
-                log("[whisper] Transcribing audio with faster-whisper (model: base)...")
-                from hooky.core.subtitles import transcribe
-                words = await asyncio.to_thread(transcribe, audio_path)
-                curr = []
-                for w in words:
-                    curr.append(w)
-                    t = str(w.get("word", "")).strip()
-                    if (t and t[-1] in ".!?") or len(curr) >= 8:
-                        cues.append({
-                            "start": curr[0]["start"],
-                            "end": curr[-1]["end"],
-                            "text": " ".join(x["word"] for x in curr)
-                        })
-                        curr = []
-                if curr:
+        if audio_path.exists() and audio_path.stat().st_size > 10000:
+            log(f"[whisper] Transcribing audio with faster-whisper (model: {os.environ.get('WHISPER_MODEL', 'tiny')})...")
+            from hooky.core.subtitles import transcribe
+            words = await asyncio.to_thread(transcribe, audio_path)
+            curr = []
+            for w in words:
+                curr.append(w)
+                t = str(w.get("word", "")).strip()
+                if (t and t[-1] in ".!?") or len(curr) >= 8:
                     cues.append({
                         "start": curr[0]["start"],
                         "end": curr[-1]["end"],
                         "text": " ".join(x["word"] for x in curr)
                     })
-                log(f"[whisper] Generated {len(cues)} speech cues from faster-whisper.")
-            else:
-                log("[captions] Warning: Audio stream probe failed; proceeding with heuristic analysis")
+                    curr = []
+            if curr:
+                cues.append({
+                    "start": curr[0]["start"],
+                    "end": curr[-1]["end"],
+                    "text": " ".join(x["word"] for x in curr)
+                })
+            log(f"[whisper] Generated {len(cues)} speech cues from faster-whisper.")
+        else:
+            log("[captions] Warning: Audio stream probe failed; proceeding with heuristic analysis")
+
+    (cache_dir / "cues.json").write_text(json.dumps(cues), encoding="utf-8")
+
+    return meta, cues
+
+
+async def run_analysis_pipeline(url: str, job: dict) -> dict[str, Any]:
+    """Execute complete hook analysis pipeline with live step-by-step progress logging."""
+    cache_dir = Path(os.environ.get("HOOKY_WEB_CACHE_DIR") or OUTPUT_DIR / "web_cache")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cues: list[dict] = []
+
+    def log(msg: str):
+        print(msg)
+        append_log(job, f"[{time.strftime('%H:%M:%S')}] {msg}")
+
+    try:
+        meta, cues = await prepare_source(url, cache_dir, job, log)
+        title, duration = meta["title"], meta["duration"]
+        video_id = meta.get("id") or extract_youtube_id(url)
+
+        if not cues:
+            raise RuntimeError("No usable source captions or audio transcript were found.")
 
         # Step 3: Emotional tension & pacing scoring
-        ANALYSIS_JOBS[job_id]["step"] = "Analyzing conversational pacing & emotional tension spikes..."
-        ANALYSIS_JOBS[job_id]["progress"] = 55
-        ANALYSIS_JOBS[job_id]["step_number"] = 3
-        
+        job["step"] = "Analyzing conversational pacing & emotional tension spikes..."
+        job["progress"] = 55
+        job["step_number"] = 3
+
         # Automatic framing & subtitle detection
         speaker_turn_count = sum(1 for c in cues if ">>" in c.get("text", "")) if cues else 0
         table_keywords = {"mafia", "game", "poker", "table", "players", "round", "panel", "debate", "guests", "tech legends"}
         is_multi_speaker = speaker_turn_count > 8 or any(kw in title.lower() for kw in table_keywords)
-        
+
         auto_framing = "fit" if is_multi_speaker else "center"
         framing_reason = (
             "Canvas Fit (Ambient Blur) auto-selected: Wide multi-speaker table footage detected"
@@ -508,11 +502,11 @@ async def run_analysis_pipeline(url: str, job_id: str) -> dict[str, Any]:
         for idx, b in enumerate(top_blocks[:3]):
             log(f"[algorithm] Candidate #{idx + 1} at {format_timestamp(b['start'])}: Score {b['score']} (Keywords: {', '.join(b['keywords'][:4])})")
 
-        # Step 4: Gemini 2.5 Flash Narrative Scoring
-        ANALYSIS_JOBS[job_id]["step"] = "Gemini 2.5 Flash evaluating narrative hooks & psychology..."
-        ANALYSIS_JOBS[job_id]["progress"] = 75
-        ANALYSIS_JOBS[job_id]["step_number"] = 4
-        log("[gemini] Dispatching high-retention prompt to Gemini 2.5 Flash...")
+        # Step 4: Gemini Narrative Scoring
+        job["step"] = "Gemini evaluating narrative hooks & psychology..."
+        job["progress"] = 75
+        job["step_number"] = 4
+        log("[gemini] Dispatching high-retention prompt to Gemini...")
 
         # Build transcript sample with high-tension blocks and early moments
         transcript_sample = ""
@@ -529,7 +523,7 @@ async def run_analysis_pipeline(url: str, job_id: str) -> dict[str, Any]:
                 if round(c["start"], 1) not in seen_starts:
                     seen_starts.add(round(c["start"], 1))
                     unique_cues.append(c)
-            
+
             sample_lines = [
                 f"[{format_timestamp(c['start'])} - {format_timestamp(c['end'])}] {c['text']}"
                 for c in unique_cues[:180]
@@ -581,7 +575,7 @@ For EACH moment, return valid JSON array:
                     e = parse_timestamp_seconds(h.get("end", s + 35))
                     if e <= s:
                         e = s + 35.0
-                    
+
                     # Snap to closest cue boundaries if cues exist
                     if cues:
                         matching_starts = [c["start"] for c in cues if abs(c["start"] - s) <= 6.0]
@@ -590,11 +584,11 @@ For EACH moment, return valid JSON array:
                         matching_ends = [c["end"] for c in cues if abs(c["end"] - e) <= 6.0]
                         if matching_ends:
                             e = min(matching_ends, key=lambda x: abs(x - e))
-                    
+
                     if e <= s + 5.0:
                         e = s + 25.0
                     dur = e - s
-                    
+
                     # Ensure words is always a list of uppercase string tokens
                     raw_words = h.get("words", [])
                     if isinstance(raw_words, str):
@@ -646,11 +640,14 @@ For EACH moment, return valid JSON array:
             for idx, h in enumerate(formatted_hooks):
                 log(f"[algorithm] Hook #{idx + 1}: [{h['start_fmt']} - {h['end_fmt']}] '{h['title']}' (Score: {h['retention_score']})")
 
-        ANALYSIS_JOBS[job_id]["step"] = f"Analysis complete! {len(formatted_hooks)} high-retention clips ready for vertical export."
-        ANALYSIS_JOBS[job_id]["progress"] = 100
-        ANALYSIS_JOBS[job_id]["step_number"] = 5
-        ANALYSIS_JOBS[job_id]["status"] = "completed"
-        ANALYSIS_JOBS[job_id]["result"] = {
+        if not formatted_hooks:
+            raise RuntimeError("No usable speech or video hooks were found.")
+
+        job["step"] = f"Analysis complete! {len(formatted_hooks)} high-retention clips ready for vertical export."
+        job["progress"] = 100
+        job["step_number"] = 5
+        job["status"] = "completed"
+        job["result"] = {
             "status": "success",
             "video_title": title,
             "video_id": video_id,
@@ -662,13 +659,13 @@ For EACH moment, return valid JSON array:
             "hooks": formatted_hooks,
         }
         log(f"[pipeline] Successfully extracted {len(formatted_hooks)} hooks from '{title}'")
-        return ANALYSIS_JOBS[job_id]["result"]
+        return job["result"]
 
     except Exception as exc:
         log(f"[analyzer] Error occurred: {exc}")
-        ANALYSIS_JOBS[job_id]["status"] = "failed"
-        ANALYSIS_JOBS[job_id]["error"] = str(exc)
-        
+        job["status"] = "failed"
+        job["error"] = str(exc)
+
         # Dynamic fallback from cues if any exist; never fabricate fake dialogue
         fallback_hooks = build_dynamic_hooks_from_cues(cues, "Video Highlight", extract_youtube_id(url), 0.0) if cues else []
         return {

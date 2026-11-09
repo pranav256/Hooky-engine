@@ -21,13 +21,13 @@ def build_parser(prog: str = "Hooky-parts") -> argparse.ArgumentParser:
         prog=prog, description="Export condensed-story or number-only chronological vertical parts.")
     parser.add_argument("source", help="Local video file or single video URL")
     parser.add_argument("--mode", choices=("story", "number-only"),
-                        default=os.environ.get("PARTS_MODE", "story"),
+                        default=os.environ.get("PARTS_MODE", "story").strip().lower(),
                         help="story condenses with AI; number-only finds funny moments and burns only their numbers")
     parser.add_argument("--part-seconds", type=float,
                         default=float(os.environ.get("PARTS_TARGET_SECONDS", "60")),
                         help="Target part length, adjusted near speech/scene boundaries (default: 60)")
     parser.add_argument("--background", choices=("blur", "plain"),
-                        default=os.environ.get("PARTS_BACKGROUND", "blur"),
+                        default=os.environ.get("PARTS_BACKGROUND", "blur").strip().lower(),
                         help="Preserve full source picture over a blurred or plain background")
     parser.add_argument("--out", type=Path, help="Export directory (default: output/parts/SOURCE_ID)")
     parser.add_argument("--caption-file", type=Path, help="Explicit timestamped VTT/SRT evidence")

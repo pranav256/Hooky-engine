@@ -37,10 +37,10 @@ FRAME_JPEG_QUALITY = 5   # ffmpeg -q:v scale (2=high quality, 31=low)
 # One clip per ~10 min of source. Tune from .env (no code change needed):
 #   AUTO_CLIP_DENSITY_MINUTES=7    -> more clips (a 3-hour podcast -> ~26)
 #   AUTO_CLIP_DENSITY_MINUTES=15   -> fewer, pickier clips
-AUTO_DENSITY = max(2.0, float(os.environ.get("AUTO_CLIP_DENSITY_MINUTES", "10") or 10))
-AUTO_MAX_CLIPS = max(1, int(os.environ.get("AUTO_MAX_CLIPS", "40") or 40))
+AUTO_DENSITY = max(2.0, float(os.environ.get("AUTO_CLIP_DENSITY_MINUTES", "10").strip() or 10))
+AUTO_MAX_CLIPS = max(1, int(os.environ.get("AUTO_MAX_CLIPS", "40").strip() or 40))
 AUTO_CANDIDATES_PER_CHUNK = max(1, min(20, int(
-    os.environ.get("AUTO_CANDIDATES_PER_CHUNK", "10") or 10)))
+    os.environ.get("AUTO_CANDIDATES_PER_CHUNK", "10").strip() or 10)))
 AUTO_MIN_CLIPS = 3       # even a 2-minute video gets a shot at ~3 picks
 AUTO_MIN_LEN = 15        # auto mode minimum clip length (s)
 AUTO_MAX_LEN = 75        # auto mode maximum clip length (s; <90 Reels cap)
@@ -315,14 +315,6 @@ def _speech_breaks(words: list[dict]) -> list[tuple[float, float]]:
     if prev is not None:
         breaks.append((prev["end"], prev["end"]))
     return breaks
-
-
-def _word_at(words: list[dict], t: float) -> dict | None:
-    """The word being spoken at time t (or None)."""
-    for w in words:
-        if w["start"] <= t <= w["end"]:
-            return w
-    return None
 
 
 def _snap_start(t: float, words: list[dict], lo: float, hi: float) -> float:

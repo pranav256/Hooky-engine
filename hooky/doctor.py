@@ -10,7 +10,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import CHANNELS_FILE, LINKS_FILE, OUTPUT_DIR, PROJECT_ROOT
+from .config import PROJECT_ROOT
 
 
 @dataclass(frozen=True)
@@ -147,9 +147,17 @@ def _path_check(name: str, path: Path, *, required: bool) -> Check:
     return Check(name, ok, detail, required)
 
 
-def dependency_checks() -> list[Check]:
+def dependency_checks(environment: dict[str, str] | None = None, project_root: Path | None = None) -> list[Check]:
     """Collect local checks only; no network or package-manager command runs."""
 
+    values = os.environ if environment is None else environment
+    root = project_root or PROJECT_ROOT
+    def path_setting(key: str, default: Path) -> Path:
+        path = Path(values.get(key) or default)
+        return path if path.is_absolute() else root / path
+    channels_file = path_setting("CHANNELS_FILE", root / "channels.txt")
+    links_file = path_setting("LINKS_FILE", root / "links.txt")
+    output_dir = path_setting("OUTPUT_DIR", root / "output")
     python_ok = sys.version_info >= (3, 10)
     python_version = platform_module.python_version()
     checks = [
@@ -166,7 +174,7 @@ def dependency_checks() -> list[Check]:
     try:
         channels_configured = any(
             line.strip() and not line.lstrip().startswith("#")
-            for line in CHANNELS_FILE.read_text(encoding="utf-8").splitlines()
+            for line in channels_file.read_text(encoding="utf-8").splitlines()
         )
     except OSError:
         pass
@@ -175,25 +183,25 @@ def dependency_checks() -> list[Check]:
         _module_check("faster_whisper", "faster-whisper", required=True),
         _module_check("yt_dlp", "yt-dlp", required=channels_configured),
         _module_check("instagrapi", "instagrapi", required=False),
-        _path_check("channels.txt", CHANNELS_FILE, required=False),
-        _path_check("links.txt", LINKS_FILE, required=False),
-        _path_check("output directory", OUTPUT_DIR, required=True),
+        _path_check("channels.txt", channels_file, required=False),
+        _path_check("links.txt", links_file, required=False),
+        _path_check("output directory", output_dir, required=True),
         _path_check(
             "state directory",
-            Path(os.environ.get("STATE_DIR") or PROJECT_ROOT / ".hooky-state"),
+            Path(values.get("STATE_DIR") or root / ".hooky-state"),
             required=True,
         ),
     ))
 
-    gemini_key = bool(os.environ.get("GEMINI_API_KEY", "").strip())
+    gemini_key = bool(values.get("GEMINI_API_KEY", "").strip())
     checks.append(Check(
         "GEMINI_API_KEY",
         gemini_key,
         "set" if gemini_key else "missing from environment/.env",
     ))
     instagram = bool(
-        os.environ.get("IG_USERNAME", "").strip()
-        and os.environ.get("IG_PASSWORD", "").strip()
+        values.get("IG_USERNAME", "").strip()
+        and values.get("IG_PASSWORD", "").strip()
     )
     checks.append(Check(
         "Instagram credentials",

@@ -77,16 +77,16 @@ Hooky provides automated clipping, transcription, and subtitle styling for verti
 ### Linux & macOS
 
 ```bash
-git clone https://github.com/pranav256/Hooky.git
-cd Hooky
+git clone https://github.com/pranav256/Hooky-engine.git
+cd Hooky-engine
 ./main.sh
 ```
 
 ### Windows (PowerShell)
 
 ```powershell
-git clone https://github.com/pranav256/Hooky.git
-cd Hooky
+git clone https://github.com/pranav256/Hooky-engine.git
+cd Hooky-engine
 Set-ExecutionPolicy -Scope Process Bypass
 .\main.ps1
 ```
@@ -110,19 +110,27 @@ Hooky includes a built-in visual Web Studio and control portal running locally a
 
 * **AI Hook Candidate Inspector**: Inspect Gemini-detected viral moments with dialogue transcripts, retention scores, and boundary timecodes.
 * **Dual-Mode Visual Simulator**: Switch between the original horizontal video and the 9:16 vertical crop preview.
-* **Auto-Tuned Framing & Subtitles**: Automatically selects between solo speaker tracking, split-screen, or ambient canvas fit with custom typography.
+* **Framing & Subtitles**: Choose a centered portrait crop or fit the full source on an ambient blurred canvas; analysis suggests a mode from source dialogue/title.
 * **Channel Radar & `.env` Management**: Monitor creator channels in `channels.txt` and fine-tune runtime environment variables directly in your browser.
 
 ---
 
 ## ⚡ Workflow in 2 Minutes
 
+After installation, run `./main.sh doctor` (Windows: `.\main.ps1 doctor`). Doctor checks local tools and reports a missing API key separately; it does not call Gemini automatically. Run `./main.sh setup` / `.\main.ps1 setup` to configure the key, then `./main.sh web` / `.\main.ps1 web`.
+
+In Studio, paste a source URL, detect hooks, select a moment, check its start/end and framing, and export. Retrieve the finished file from Output Gallery. Source captions provide subtitle timing; audio transcription is the fallback when a usable track is unavailable. URL make ranks speech scenes locally, while Detect Hooks also asks Gemini for narrative selection.
+
+Studio starts at most two workers at once. Cancel stops that worker's download/encoding process tree. Jobs survive page reload in history; after a server restart unfinished jobs are marked interrupted and require an explicit new start. Saved settings apply to new jobs; active jobs keep their starting settings. Studio file values take precedence over the inherited process environment. Removing a file setting restores the inherited value or built-in default. Source/output path changes apply immediately; token and history/session storage changes require a restart. Previously completed jobs retain access to their recorded output directory.
+
+Studio keeps the newest 100 terminal jobs and 200 bounded log lines per job. Disposable Studio caches are cleaned after seven days or above 1 GiB, when no worker is using them. Completed exports and CLI manifests/checkpoints stay outside this cleanup.
+
 ### 1. Feed Channels or Links
 
 Add YouTube handles to `channels.txt`:
 ```text
-@hubermanlab | limit=3 min_views=250000
-https://www.youtube.com/@TheDiaryOfACEO | limit=2
+@hubermanlab | limit=3 | min_views=250000
+https://www.youtube.com/@TheDiaryOfACEO | limit=2 | scan=20
 ```
 
 Or add specific video URLs / local files to `links.txt`:
@@ -168,13 +176,13 @@ Hooky includes high-converting subtitle templates inspired by top creators:
 
 | Style | Description | Preview / Font |
 |---|---|---|
-| `titanium` / `gold` | **Quiet Luxury**: Warm titanium metallic glow, elegant editorial typography | Archivo / Inter Bold |
-| `hormozi` | **Viral Hook Style**: Bold font, uppercase, dynamic bright color highlights on spoken words | Impact / Montserrat Bold |
-| `clean` | **Modern Minimalist**: Subtle background box, legible, professional podcast aesthetic | Roboto / Arial |
-| `yellow` | **High-Contrast Attention**: Vibrant yellow word highlights for maximum retention | Helvetica Bold |
-| `minimal` | **Cinematic Italic**: Clean underline without background boxes | Playfair / Serif Italic |
-| `emerald` | **Code & Tech**: High-tech matrix emerald green glow | JetBrains Mono Bold |
-| `crimson` | **Bold Shock**: Punchy crimson neon drop-shadow | Syne / Impact Bold |
+| `titanium` / `gold` | **Quiet Luxury**: Warm titanium metallic glow, elegant editorial typography | Montserrat Bold |
+| `hormozi` | **Viral Hook Style**: Bold font, uppercase, dynamic bright color highlights on spoken words | Montserrat Bold |
+| `clean` | **Modern Minimalist**: Subtle background box, legible, professional podcast aesthetic | Arial |
+| `yellow` | **High-Contrast Attention**: Vibrant yellow word highlights for maximum retention | Montserrat Bold |
+| `minimal` | **Cinematic Italic**: Clean underline without background boxes | Georgia |
+| `emerald` | **Code & Tech**: High-tech matrix emerald green glow | Consolas |
+| `crimson` | **Bold Shock**: Punchy crimson neon drop-shadow | Montserrat Bold |
 
 List all available styles:
 ```bash
@@ -188,7 +196,6 @@ List all available styles:
 | Command | Action |
 |---|---|
 | `./main.sh web` (or `./main.sh`) | Launch visual Web Studio and Control Portal in your browser (`http://127.0.0.1:8000`) |
-| `./main.sh` | Process pending items in `links.txt` |
 | `./main.sh make` | Scan channels, add winners to `links.txt`, and render all clips |
 | `./main.sh preview` | Dry-run: view pending jobs and highlights without touching files |
 | `./main.sh post` | Drain the Instagram queue with safety cooldown intervals |
@@ -208,28 +215,28 @@ The setup wizard generates `.env`. You can fine-tune settings anytime:
 ```dotenv
 # --- AI Engine ---
 GEMINI_API_KEY=AIzaSy...               # Required for highlight extraction
-GEMINI_MODEL=gemini-2.0-flash          # Fast & accurate highlight reasoning
+GEMINI_MODEL=gemini-3.8-flash           # Current default model
 
 # --- Subtitles & Whisper ---
-WHISPER_MODEL=small                    # tiny, base, small, medium, large-v3
+WHISPER_MODEL=tiny                     # Default; larger installed models are optional
 WHISPER_COMPUTE=int8                   # int8, float16 (for GPU CUDA)
-SUBTITLE_STYLE=hormozi                 # hormozi, clean, yellow
+SUB_STYLE=hormozi                      # Default; list presets with ./main.sh styles
 
 # --- Video Quality & Encoding ---
-QUALITY=highest                        # highest, high, fast
+QUALITY=highest                        # highest, high, low
 X264_PRESET=medium                     # ultrafast, veryfast, medium, slow
-FFMPEG_THREADS=4
+FFMPEG_THREADS=2
 
 # --- Channel Discovery ---
-CHANNEL_BACKLOG_MAX=10                 # Max pending sources allowed at once
-CHANNEL_SCAN_MAX=50                    # Videos to inspect per channel
+CHANNEL_BACKLOG_MAX=20                 # Default pending source budget
+CHANNEL_SCAN_MAX=0                     # Default: inspect all available videos
 
 # --- Instagram Automation (Optional) ---
 IG_USERNAME=your_account
 IG_PASSWORD=your_password
-QUEUE_MIN_GAP=1800                     # Minimum seconds between posts (30 min)
-QUEUE_MAX_GAP=7200                     # Maximum jitter gap (2 hours)
-POST_HOURS=9-22                        # Active posting window (9 AM to 10 PM)
+QUEUE_MIN_GAP_MINUTES=60               # Default minimum between scheduled posts
+QUEUE_MAX_GAP_MINUTES=120              # Default maximum gap between scheduled posts
+POST_HOURS=17-0                        # Default local schedule: 5 PM to midnight
 
 # --- YouTube Auth / Cookies (Optional for 403 bypass) ---
 YTDLP_COOKIES_FROM_BROWSER=chrome      # chrome, firefox, edge, or brave
@@ -245,14 +252,14 @@ Need to split a long masterclass or movie clip into sequential parts?
 
 ```bash
 # Auto-split into clean numbered 60s segments with part badges
-./hooky.sh parts interview.mp4 --part-duration 60
+./main.sh parts interview.mp4 --part-seconds 60
 ```
 
 ---
 
 ## 🧪 Testing & Code Quality
 
-Hooky is rigorously tested across operating systems (Ubuntu, Windows, macOS) with 250+ unit and safety tests:
+The offline test suite covers pipeline logic, file safety, settings, and Studio process cleanup. CI runs on Ubuntu and Windows:
 
 ```bash
 # Sync dependencies
@@ -277,7 +284,7 @@ Contributions, feature requests, and bug reports are welcome!
 
 ## 📄 License
 
-Distributed under the MIT License. See [`LICENSE`](file:///d:/Clipper/LICENSE) for more information.
+Distributed under the MIT License. See [LICENSE](LICENSE) for more information.
 
 ---
 

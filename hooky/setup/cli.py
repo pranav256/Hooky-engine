@@ -117,10 +117,15 @@ def _setup_environment_overrides() -> dict[str, str]:
 
 def _normalise_bool_settings(values: dict[str, str]) -> None:
     for key in ("DELETE_SOURCE_AFTER_CLIP", "DELETE_POSTED_CLIPS"):
-        values[key] = env_bool(bool_value(values.get(key), True))
+        values[key] = env_bool(bool_value(values.get(key), False))
 
 
 def _validate_values(values: dict[str, str]) -> None:
+    from ..dotenv import validate_settings
+    try:
+        validate_settings(values)
+    except ValueError as exc:
+        raise SetupValidationError(str(exc)) from exc
     if values.get("HOOKY_PROFILE", "adaptive") not in PROFILE_NAMES:
         raise SetupValidationError("HOOKY_PROFILE must be adaptive, balanced, quality, or low")
     if values.get("QUALITY", "highest") not in {"highest", "high", "low"}:
@@ -132,7 +137,7 @@ def _validate_values(values: dict[str, str]) -> None:
     if values.get("SUBTITLE_SOURCE", "auto") not in SUBTITLE_SOURCES:
         raise SetupValidationError("SUBTITLE_SOURCE must be auto, source, or whisper")
     if values.get("SUB_STYLE", "hormozi") not in SUBTITLE_STYLES:
-        raise SetupValidationError("SUB_STYLE must be hormozi, clean, or yellow")
+        raise SetupValidationError("SUB_STYLE must be a supported subtitle style")
     for key in ("WHISPER_THREADS", "FFMPEG_THREADS"):
         try:
             if int(values.get(key, "0")) < 1:

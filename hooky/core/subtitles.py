@@ -128,8 +128,7 @@ def _max_words_override() -> int:
 LINE_SPLIT_GAP = 0.7        # pause (s) long enough to start a new caption line
 LINE_SPLIT_DURATION = 4.2   # max seconds one caption line stays on screen
 WORD_GLOW = 0.30            # keep a finished line up this long after its last word
-MIN_WORD_LEN = 0.05         # never let a word's spoken span be shorter than this
-MAX_WORD_LEN = 1.5          # ...or longer than this (guards bad whisper end stamps)
+MAX_WORD_LEN = 1.5          # cap spoken spans (guards bad whisper end stamps)
 FADE_MS = 60                # line fade, only on edges that don't touch another line
 _PUNCT_EDGES = "\"'\u201c\u201d\u2018\u2019.!?…,;:-\u2014()[]"  # stripped off word edges
 
@@ -327,7 +326,6 @@ def _split_rows(chunk: list[dict], max_words: int,
 
 def _karaoke_line(rows: list[list[dict]], next_start: float | None, clip_len: float,
                   fade_in: int, fade_out: int, upper: bool,
-                  pop_scale: int | None = None,
                   font_size: int | None = None) -> tuple[float, float, str]:
     r"""Build one Dialogue line. Returns (start, end, text).
 
@@ -365,10 +363,6 @@ def _karaoke_line(rows: list[list[dict]], next_start: float | None, clip_len: fl
     prefix = ""
     if font_size:
         prefix += r"{\fs%d}" % font_size
-    if pop_scale:
-        pop_ms = 90
-        prefix += (r"{\fscx%d\fscy%d\t(0,%d,\fscx100\fscy100)}"
-                   % (pop_scale, pop_scale, pop_ms))
     fade = r"{\fad(%d,%d)}" % (fade_in, fade_out)
     return start, end, prefix + fade + joined
 
@@ -442,7 +436,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
         start, end, text = _karaoke_line(rows, next_start, clip_len,
                                          fade_in, fade_out, style["uppercase"],
-                                         pop_scale=None,
                                          font_size=dynamic_font_size)
         if int(end * 100) <= int(start * 100):
             continue
@@ -450,10 +443,3 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             f"Dialogue: 0,{_ass_time(start)},{_ass_time(end)},Sub,,0,0,0,,{text}"
         )
     return header + "\n".join(events) + "\n"
-
-
-def words_for_window(words: list[dict], start: float, end: float) -> list[dict]:
-    """Slice the global word list to a clip window."""
-    return [w for w in words if w["end"] > start and w["start"] < end]
-
-

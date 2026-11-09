@@ -2,43 +2,21 @@
 import os
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+from .dotenv import parse_dotenv
+
+PROJECT_ROOT = Path(os.environ.get("HOOKY_PROJECT_ROOT") or Path(__file__).resolve().parent.parent)
 ENV_FILE = PROJECT_ROOT / ".env"
 
-
-def _dotenv_value(raw: str) -> str:
-    """Strip whitespace-delimited comments while preserving quoted/hash values."""
-    quote = ""
-    escaped = False
-    for index, char in enumerate(raw):
-        if char == "#" and not quote and (index == 0 or raw[index - 1].isspace()):
-            raw = raw[:index]
-            break
-        if char in {"'", '"'} and not escaped:
-            if quote == char:
-                quote = ""
-            elif not quote:
-                quote = char
-        escaped = char == "\\" and not escaped
-    value = raw.strip()
-    if len(value) >= 2 and value[0] in {"'", '"'} and value[-1] == value[0]:
-        value = value[1:-1]
-    return value
+DOTENV_KEYS: set[str] = set()
 
 
 def _load_dotenv() -> None:
-    """Tiny .env loader (avoids extra dependency)."""
-    if not ENV_FILE.exists():
+    if os.environ.get("HOOKY_SETTINGS_SNAPSHOT") == "1" or not ENV_FILE.exists():
         return
-    for raw_line in ENV_FILE.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        key = key.strip()
-        value = _dotenv_value(value)
-        if key and key not in os.environ:
+    for key, value in parse_dotenv(ENV_FILE.read_text(encoding="utf-8")).items():
+        if key not in os.environ:
             os.environ[key] = value
+            DOTENV_KEYS.add(key)
 
 
 _load_dotenv()
@@ -168,12 +146,12 @@ def _env_bool(key: str, default: bool) -> bool:
 # --- Lean output and cleanup -------------------------------------------------
 # Source captions are used whenever available; Whisper remains the fallback
 # for sources without a usable timestamped caption track.
-SUBTITLE_SOURCE = os.environ.get("SUBTITLE_SOURCE", "auto").strip().lower()
-SUB_STYLE = os.environ.get("SUB_STYLE", "hormozi").strip().lower()
+SUBTITLE_SOURCE = os.environ.get("SUBTITLE_SOURCE", "auto").strip().lower() or "auto"
+SUB_STYLE = os.environ.get("SUB_STYLE", "hormozi").strip().lower() or "hormozi"
 SUB_LANG = os.environ.get("SUB_LANG", "").strip() or None
 MAKE_COVERS = _env_bool("MAKE_COVERS", False)
 AUDIO_NORMALIZATION = _env_bool("AUDIO_NORMALIZATION", True)
-AUTO_CLIP_MODE = os.environ.get("AUTO_CLIP_MODE", "content").strip().lower()
+AUTO_CLIP_MODE = os.environ.get("AUTO_CLIP_MODE", "content").strip().lower() or "content"
 
 # These are intentionally enabled for the user's disposable-media workflow.
 # Queue history and manifests are always retained; only confirmed media files

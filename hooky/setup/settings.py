@@ -10,7 +10,7 @@ QUALITY_NAMES = ("highest", "high", "low")
 WHISPER_MODELS = ("tiny", "base", "small")
 WHISPER_COMPUTE_TYPES = ("int8", "float16", "float32")
 SUBTITLE_SOURCES = ("auto", "source", "whisper")
-SUBTITLE_STYLES = ("hormozi", "clean", "yellow")
+SUBTITLE_STYLES = ("hormozi", "clean", "yellow", "gold", "titanium", "minimal", "emerald", "crimson")
 YOUTUBE_BROWSERS = (
     "chrome", "chromium", "firefox", "brave", "edge", "opera", "safari",
     "vivaldi", "whale",

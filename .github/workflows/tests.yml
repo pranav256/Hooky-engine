@@ -3,6 +3,16 @@ name: tests
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      website_revision:
+        description: 'Compatible Hooky-website commit containing browser workflow script (full SHA)'
+        required: false
+        type: string
+      media_smoke:
+        description: 'Run offline synthetic FFmpeg media smoke'
+        default: false
+        type: boolean
 
 jobs:
   unit:
@@ -56,3 +66,62 @@ jobs:
       - name: Test
         shell: pwsh
         run: uv run pytest -q
+
+  browser:
+    if: ${{ inputs.website_revision != '' || vars.HOOKY_WEBSITE_REVISION != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      WEBSITE_REVISION: ${{ inputs.website_revision || vars.HOOKY_WEBSITE_REVISION }}
+    steps:
+      - name: Validate paired revision
+        run: '[[ "$WEBSITE_REVISION" =~ ^[0-9a-fA-F]{40}$ ]]'
+      - uses: actions/checkout@v4
+        with:
+          path: Hooky-engine
+      - uses: actions/checkout@v4
+        with:
+          repository: pranav256/Hooky-website
+          ref: ${{ env.WEBSITE_REVISION }}
+          path: Hooky-website
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: Hooky-website/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install browser hosts
+        run: |
+          python -m pip install uv
+          cd Hooky-engine
+          uv sync --locked --extra all --extra dev
+          cd ../Hooky-website
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run build
+      - name: Deterministic browser matrix
+        working-directory: Hooky-website
+        run: npm run check:browser-ci
+      - name: Upload browser evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-browser-failure
+          path: Hooky-website/.design-review/
+
+  media-smoke:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.media_smoke }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: sudo apt-get update && sudo apt-get install --no-install-recommends -y ffmpeg
+      - run: python -m pip install uv && uv sync --locked --extra all --extra dev
+      - run: uv run pytest -q tests/test_web_media_smoke.py -m integration --run-integration
+        env:
+          HOOKY_MEDIA_SMOKE: '1'
