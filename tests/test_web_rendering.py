@@ -68,7 +68,12 @@ def test_make_uses_same_render_path_without_paid_analysis(tmp_path, monkeypatch)
     prepare = AsyncMock(return_value=({"title": "Source", "duration": 50}, [{"start": 0, "end": 50, "text": "Source text"}]))
     monkeypatch.setattr(rendering, "prepare_source", prepare)
     monkeypatch.setattr(rendering, "extract_ranked_scenes", Mock(return_value=[{"title": "Chosen", "start": 1.25, "end": 20.5}]))
-    render = AsyncMock(return_value="Source/reel.mp4")
+    async def preview_before_render(payload, job, cache, cues):
+        assert job["result"]["hooks"][0]["title"] == "Chosen"
+        assert job["result"]["url"] == "https://example.com/video"
+        assert job["result"]["hooks"][0]["duration"] == "19.2s"
+        return "Source/reel.mp4"
+    render = AsyncMock(side_effect=preview_before_render)
     monkeypatch.setattr(rendering, "render_clip", render)
     job = {"id": "make_a", "status": "running"}
     outputs = asyncio.run(rendering.make_url({"target": "https://example.com/video", "style": "gold", "framing": "center"}, job, tmp_path))

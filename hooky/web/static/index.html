@@ -93,6 +93,12 @@
 
     <!-- ==================== MAIN CONTENT ==================== -->
     <main id="studio-content" class="studio-main">
+      <div
+        id="studio-alert"
+        role="status"
+        aria-live="polite"
+        class="studio-alert hidden"
+      ></div>
       <!-- ==================== VIEW 1: CLIPPER STUDIO ==================== -->
       <section id="view-studio" class="space-y-6" aria-label="Clip studio">
         <div class="workspace-heading">
@@ -129,7 +135,6 @@
             Dismiss
           </button>
         </div>
-        <div id="studio-alert" role="status" class="studio-alert hidden"></div>
 
         <!-- ==================== TOP COMMAND & CONTROLS TOOLBAR ==================== -->
         <div class="brutal-card p-5 space-y-4 studio-command">
@@ -148,7 +153,7 @@
                 type="text"
                 placeholder="Paste a YouTube or video URL to get started…"
                 value=""
-                class="w-full bg-[#101110] border border-white/[0.08] rounded-md pl-10 pr-4 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-white/20 font-mono transition-colors"
+                class="w-full bg-[var(--hooky-bg)] border border-white/[0.08] rounded-md pl-10 pr-4 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-white/20 font-mono transition-colors"
               />
             </div>
 
@@ -177,9 +182,12 @@
               <button
                 id="execute-make-btn"
                 onclick="triggerMakePipeline()"
-                class="px-3.5 py-2 bg-[#242721] hover:bg-[#2b2e38] border border-white/[0.08] text-white font-mono text-xs rounded-md flex items-center justify-center gap-1.5 transition-all"
+                class="px-3.5 py-2 bg-[var(--hooky-raised)] hover:bg-[#2b2e38] border border-white/[0.08] text-white font-mono text-xs rounded-md flex items-center justify-center gap-1.5 transition-all"
               >
-                <i data-lucide="play" class="w-3 h-3 text-[#d2fa69]"></i>
+                <i
+                  data-lucide="play"
+                  class="w-3 h-3 text-[var(--hooky-accent)]"
+                ></i>
                 <span>Run pipeline</span>
               </button>
             </div>
@@ -197,9 +205,12 @@
               >
               <div
                 id="smart-recommendation-pill"
-                class="flex items-center gap-1.5 px-2.5 py-1 bg-[#242721] border border-white/[0.08] rounded-md text-slate-300 font-mono text-xs"
+                class="flex items-center gap-1.5 px-2.5 py-1 bg-[var(--hooky-raised)] border border-white/[0.08] rounded-md text-slate-300 font-mono text-xs"
               >
-                <i data-lucide="cpu" class="w-3.5 h-3.5 text-[#d2fa69]"></i>
+                <i
+                  data-lucide="cpu"
+                  class="w-3.5 h-3.5 text-[var(--hooky-accent)]"
+                ></i>
                 <span id="smart-recommendation-text">Auto-tuned: Ready</span>
               </div>
             </div>
@@ -208,13 +219,13 @@
             <div class="flex flex-wrap items-center gap-2.5">
               <!-- Framing Mode Selector -->
               <div
-                class="flex items-center gap-1 bg-[#101110] p-0.5 border border-white/[0.08] rounded-md font-mono text-[11px]"
+                class="flex items-center gap-1 bg-[var(--hooky-bg)] p-0.5 border border-white/[0.08] rounded-md font-mono text-[11px]"
               >
                 <span class="px-2 text-slate-500">Frame:</span>
                 <button
                   onclick="setFramingMode('auto')"
                   id="frame-mode-auto"
-                  class="px-2.5 py-0.5 bg-[#242721] text-white font-medium rounded transition-all"
+                  class="px-2.5 py-0.5 bg-[var(--hooky-raised)] text-white font-medium rounded transition-all"
                 >
                   Auto
                 </button>
@@ -236,13 +247,13 @@
 
               <!-- Subtitle Style Preset Selector -->
               <div
-                class="flex items-center gap-1 bg-[#101110] p-0.5 border border-white/[0.08] rounded-md font-mono text-[11px]"
+                class="flex items-center gap-1 bg-[var(--hooky-bg)] p-0.5 border border-white/[0.08] rounded-md font-mono text-[11px]"
               >
                 <span class="px-2 text-slate-500">Captions:</span>
                 <button
                   onclick="setSubtitleMode('auto')"
                   id="sub-mode-auto"
-                  class="px-2.5 py-0.5 bg-[#242721] text-white font-medium rounded transition-all"
+                  class="px-2.5 py-0.5 bg-[var(--hooky-raised)] text-white font-medium rounded transition-all"
                 >
                   Auto
                 </button>
@@ -296,13 +307,13 @@
           <div
             id="pipeline-stepper"
             aria-label="Task progress"
-            class="hidden p-4 bg-[#101110] border border-white/[0.08] rounded-lg space-y-3"
+            class="hidden p-4 bg-[var(--hooky-bg)] border border-white/[0.08] rounded-lg space-y-3"
           >
             <div class="flex items-center justify-between text-xs font-mono">
               <div class="flex items-center gap-2 text-slate-200">
                 <i
                   data-lucide="loader"
-                  class="w-4 h-4 animate-spin text-[#d2fa69]"
+                  class="w-4 h-4 animate-spin text-[var(--hooky-accent)]"
                 ></i>
                 <span id="stepper-status-text" role="status" aria-live="polite"
                   >Processing engine task...</span
@@ -310,7 +321,7 @@
               </div>
               <span
                 id="stepper-percent"
-                class="font-medium text-[#d2fa69] tabular"
+                class="font-medium text-[var(--hooky-accent)] tabular"
                 >15%</span
               >
             </div>
@@ -319,7 +330,7 @@
             <div class="w-full h-1.5 bg-white/5 rounded-full overflow-hidden">
               <div
                 id="stepper-progress-fill"
-                class="h-full bg-[#d2fa69] transition-all duration-300"
+                class="h-full bg-[var(--hooky-accent)] transition-all duration-300"
                 style="width: 15%"
               ></div>
             </div>
@@ -358,7 +369,7 @@
               id="live-engine-console"
               role="log"
               aria-label="Engine console"
-              class="p-3 bg-[#0a0b0a] border border-white/[0.06] rounded-md font-mono text-[11px] text-slate-300 h-32 overflow-y-auto space-y-1"
+              class="p-3 bg-[var(--hooky-deep)] border border-white/[0.06] rounded-md font-mono text-[11px] text-slate-300 h-32 overflow-y-auto space-y-1"
             >
               <p class="text-slate-500">
                 [system] Hooky engine pipeline monitoring active
@@ -387,7 +398,10 @@
               <h3
                 class="font-medium text-sm text-white flex items-center gap-2"
               >
-                <i data-lucide="sparkles" class="w-4 h-4 text-[#d2fa69]"></i>
+                <i
+                  data-lucide="sparkles"
+                  class="w-4 h-4 text-[var(--hooky-accent)]"
+                ></i>
                 <span>Your moments</span>
               </h3>
               <span
@@ -412,9 +426,9 @@
                 class="flex items-center justify-between border-b border-white/[0.08] pb-3"
               >
                 <div class="flex items-center gap-2">
-                  <span class="font-medium text-sm text-white"
-                    >Source and style preview</span
-                  >
+                  <h3 class="font-medium text-sm text-white">
+                    Source and style preview
+                  </h3>
                   <span
                     id="preview-mode-tag"
                     class="text-[10px] font-mono px-2 py-0.5 bg-white/5 text-slate-300 border border-white/10 rounded"
@@ -425,7 +439,7 @@
 
                 <!-- Switcher: YouTube Source vs Vertical Canvas -->
                 <div
-                  class="flex items-center gap-1 bg-[#101110] p-1 border border-white/[0.08] rounded-md text-xs font-mono"
+                  class="flex items-center gap-1 bg-[var(--hooky-bg)] p-1 border border-white/[0.08] rounded-md text-xs font-mono"
                 >
                   <button
                     id="preview-tab-player"
@@ -439,7 +453,7 @@
                     id="preview-tab-canvas"
                     aria-pressed="false"
                     onclick="switchPreviewMode('canvas')"
-                    class="px-3 py-1 bg-[#242721] text-white font-medium rounded border border-white/10 transition-all"
+                    class="px-3 py-1 bg-[var(--hooky-raised)] text-white font-medium rounded border border-white/10 transition-all"
                   >
                     9:16 canvas
                   </button>
@@ -464,7 +478,6 @@
                 <iframe
                   id="youtube-embed-frame"
                   title="Source video preview"
-                  src=""
                   class="w-full h-full border-0 hidden"
                   allow="
                     accelerometer;
@@ -481,66 +494,20 @@
               <!-- Sub-View B: Interactive 9:16 Vertical Video Canvas Simulator -->
               <div
                 id="preview-canvas-container"
-                class="hidden aspect-[16/9] w-full bg-[#101110] border border-white/[0.08] rounded-lg relative overflow-hidden flex items-center justify-center"
+                class="hidden aspect-[16/9] w-full bg-[var(--hooky-bg)] border border-white/[0.08] rounded-lg relative overflow-hidden flex items-center justify-center"
               >
-                <!-- Ambient Blurred Backdrop for Canvas Fit Mode -->
-                <div
-                  id="ambient-blur-backdrop"
-                  class="absolute inset-0 bg-cover bg-center filter blur-xl opacity-30 scale-110"
-                ></div>
-
-                <!-- Simulated Multi-Speaker Table Avatars -->
-                <div
-                  id="avatar-host"
-                  class="absolute left-[16%] top-[26%] flex flex-col items-center opacity-40 transition-opacity duration-300"
-                >
-                  <div
-                    class="w-14 h-14 rounded-full bg-[#242721] border border-white/20 flex items-center justify-center text-slate-400 font-medium text-xs"
-                  >
-                    Speaker A
-                  </div>
-                  <span class="text-[10px] font-mono text-slate-400 mt-1"
-                    >Host</span
-                  >
-                </div>
-
-                <div
-                  id="avatar-speaker1"
-                  class="absolute left-[44%] top-[22%] flex flex-col items-center opacity-100 transition-opacity duration-300"
-                >
-                  <div
-                    class="w-16 h-16 rounded-full bg-[#d2fa69]/10 border border-[#d2fa69] flex items-center justify-center text-[#d2fa69] font-medium text-sm"
-                  >
-                    Speaker B
-                  </div>
-                  <span
-                    class="text-[10px] font-mono text-[#d2fa69] mt-1 flex items-center gap-1 font-medium"
-                  >
-                    <span
-                      class="w-1.5 h-1.5 rounded-full bg-[#d2fa69] pulse-dot"
-                    ></span>
-                    Active voice
-                  </span>
-                </div>
-
-                <div
-                  id="avatar-speaker2"
-                  class="absolute right-[16%] top-[26%] flex flex-col items-center opacity-40 transition-opacity duration-300"
-                >
-                  <div
-                    class="w-14 h-14 rounded-full bg-[#242721] border border-white/20 flex items-center justify-center text-slate-400 font-medium text-xs"
-                  >
-                    Speaker C
-                  </div>
-                  <span class="text-[10px] font-mono text-slate-400 mt-1"
-                    >Guest</span
-                  >
-                </div>
+                <iframe
+                  id="canvas-video-frame"
+                  title="Source video in style preview"
+                  class="absolute inset-0 w-full h-full border-0 hidden"
+                  allow="autoplay; encrypted-media; picture-in-picture"
+                  allowfullscreen
+                ></iframe>
 
                 <!-- 9:16 Vertical Cut Wireframe Indicator -->
                 <div
                   id="crop-box"
-                  class="absolute inset-y-0 w-[42%] border border-[#d2fa69]/70 pointer-events-none z-10 flex flex-col justify-end p-4"
+                  class="absolute inset-y-0 w-[42%] border border-[var(--hooky-accent)]/70 pointer-events-none z-10 flex flex-col justify-end p-4"
                 >
                   <div
                     class="bg-black/75 backdrop-blur-sm p-2 border border-white/10 rounded text-center mb-8"
@@ -578,7 +545,7 @@
               </div>
               <!-- Dialogue Transcript Inspector -->
               <div
-                class="p-3.5 bg-[#101110] border border-white/[0.08] rounded-lg space-y-2"
+                class="p-3.5 bg-[var(--hooky-bg)] border border-white/[0.08] rounded-lg space-y-2"
               >
                 <div class="flex items-center justify-between text-xs">
                   <span class="font-medium text-slate-300 font-mono text-[11px]"
@@ -624,7 +591,7 @@
               </div>
               <!-- Fine-Tune Timing Nudge Bar -->
               <div
-                class="p-2.5 bg-[#101110] border border-white/[0.08] rounded-lg flex items-center justify-between text-xs"
+                class="p-2.5 bg-[var(--hooky-bg)] border border-white/[0.08] rounded-lg flex items-center justify-between text-xs"
               >
                 <span class="font-medium text-slate-400 font-mono text-[11px]"
                   >Fine-tune the cut</span
@@ -632,26 +599,26 @@
                 <div class="flex items-center gap-1.5 font-mono text-[11px]">
                   <button
                     onclick="nudgeTime('start', -0.5)"
-                    class="px-2.5 py-0.5 bg-[#191b18] hover:bg-[#242721] text-slate-300 border border-white/10 rounded transition-all"
+                    class="px-2.5 py-0.5 bg-[var(--hooky-panel)] hover:bg-[var(--hooky-raised)] text-slate-300 border border-white/10 rounded transition-all"
                   >
                     -0.5s start
                   </button>
                   <button
                     onclick="nudgeTime('start', +0.5)"
-                    class="px-2.5 py-0.5 bg-[#191b18] hover:bg-[#242721] text-slate-300 border border-white/10 rounded transition-all"
+                    class="px-2.5 py-0.5 bg-[var(--hooky-panel)] hover:bg-[var(--hooky-raised)] text-slate-300 border border-white/10 rounded transition-all"
                   >
                     +0.5s start
                   </button>
                   <span class="text-slate-600">|</span>
                   <button
                     onclick="nudgeTime('end', -0.5)"
-                    class="px-2.5 py-0.5 bg-[#191b18] hover:bg-[#242721] text-slate-300 border border-white/10 rounded transition-all"
+                    class="px-2.5 py-0.5 bg-[var(--hooky-panel)] hover:bg-[var(--hooky-raised)] text-slate-300 border border-white/10 rounded transition-all"
                   >
                     -0.5s end
                   </button>
                   <button
                     onclick="nudgeTime('end', +0.5)"
-                    class="px-2.5 py-0.5 bg-[#191b18] hover:bg-[#242721] text-slate-300 border border-white/10 rounded transition-all"
+                    class="px-2.5 py-0.5 bg-[var(--hooky-panel)] hover:bg-[var(--hooky-raised)] text-slate-300 border border-white/10 rounded transition-all"
                   >
                     +0.5s end
                   </button>
@@ -672,7 +639,10 @@
               <h2
                 class="text-base font-semibold text-white flex items-center gap-2"
               >
-                <i data-lucide="sliders" class="w-4 h-4 text-[#d2fa69]"></i>
+                <i
+                  data-lucide="sliders"
+                  class="w-4 h-4 text-[var(--hooky-accent)]"
+                ></i>
                 <span>Settings</span>
               </h2>
               <p class="text-xs text-slate-400 mt-1">
@@ -706,7 +676,7 @@
               onclick="switchEnvTab('form')"
               id="env-tab-form"
               aria-pressed="true"
-              class="px-3 py-1.5 bg-[#242721] text-white font-medium rounded-md border border-white/10 transition-all"
+              class="px-3 py-1.5 bg-[var(--hooky-raised)] text-white font-medium rounded-md border border-white/10 transition-all"
             >
               Visual form
             </button>
@@ -737,7 +707,7 @@
                   id="env-gemini-key"
                   type="password"
                   placeholder="Paste your Gemini API key"
-                  class="w-full bg-[#101110] border border-white/[0.08] rounded-md px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-white/20"
+                  class="w-full bg-[var(--hooky-bg)] border border-white/[0.08] rounded-md px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-white/20"
                 />
                 <button
                   type="button"
@@ -762,7 +732,7 @@
               >
               <select
                 id="env-gemini-model"
-                class="w-full bg-[#101110] border border-white/[0.08] rounded-md px-3 py-2 text-xs text-white focus:outline-none focus:border-white/20"
+                class="w-full bg-[var(--hooky-bg)] border border-white/[0.08] rounded-md px-3 py-2 text-xs text-white focus:outline-none focus:border-white/20"
               >
                 <option value="" disabled>Use engine default</option>
                 <option value="gemini-3.8-flash">
@@ -786,7 +756,7 @@
               >
               <select
                 id="env-sub-style"
-                class="w-full bg-[#101110] border border-white/[0.08] rounded-md px-3 py-2 text-xs text-white focus:outline-none focus:border-white/20"
+                class="w-full bg-[var(--hooky-bg)] border border-white/[0.08] rounded-md px-3 py-2 text-xs text-white focus:outline-none focus:border-white/20"
               >
                 <option value="" disabled>Use engine default</option>
                 <option value="gold">Warm titanium (gold)</option>
@@ -809,7 +779,7 @@
                 id="env-gemini-fallbacks"
                 type="text"
                 placeholder="gemini-3.1-flash-lite,gemini-flash-latest"
-                class="w-full bg-[#101110] border border-white/[0.08] rounded-md px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-white/20"
+                class="w-full bg-[var(--hooky-bg)] border border-white/[0.08] rounded-md px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-white/20"
               />
               <p class="text-[11px] text-slate-500">
                 Comma-separated models rotated automatically during rate limits
@@ -829,7 +799,7 @@
                 type="number"
                 min="2"
                 max="60"
-                class="w-full bg-[#101110] border border-white/[0.08] rounded-md px-3.5 py-2 text-xs text-white focus:outline-none focus:border-white/20 tabular"
+                class="w-full bg-[var(--hooky-bg)] border border-white/[0.08] rounded-md px-3.5 py-2 text-xs text-white focus:outline-none focus:border-white/20 tabular"
               />
               <p class="text-[11px] text-slate-500">
                 Clips extracted per N minutes of source footage
@@ -849,7 +819,7 @@
                 type="number"
                 min="1"
                 max="32"
-                class="w-full bg-[#101110] border border-white/[0.08] rounded-md px-3.5 py-2 text-xs text-white focus:outline-none focus:border-white/20 tabular"
+                class="w-full bg-[var(--hooky-bg)] border border-white/[0.08] rounded-md px-3.5 py-2 text-xs text-white focus:outline-none focus:border-white/20 tabular"
               />
               <p class="text-[11px] text-slate-500">
                 Worker threads allocated for FFmpeg encoding
@@ -863,7 +833,7 @@
               id="env-raw-textarea"
               aria-label="Raw environment configuration"
               rows="16"
-              class="w-full bg-[#101110] border border-white/[0.08] rounded-lg p-4 font-mono text-xs text-slate-200 focus:outline-none focus:border-white/20 leading-relaxed"
+              class="w-full bg-[var(--hooky-bg)] border border-white/[0.08] rounded-lg p-4 font-mono text-xs text-slate-200 focus:outline-none focus:border-white/20 leading-relaxed"
             ></textarea>
           </div>
 
@@ -871,7 +841,7 @@
             id="env-status-alert"
             role="status"
             aria-live="polite"
-            class="hidden p-3 bg-emerald-500/10 border border-emerald-500/20 text-[#d2fa69] text-xs font-mono rounded-md"
+            class="hidden p-3 bg-emerald-500/10 border border-emerald-500/20 text-[var(--hooky-accent)] text-xs font-mono rounded-md"
           >
             Environment configuration saved successfully and reloaded into
             engine.
@@ -889,7 +859,10 @@
               <h2
                 class="text-base font-semibold text-white flex items-center gap-2"
               >
-                <i data-lucide="radio" class="w-4 h-4 text-[#d2fa69]"></i>
+                <i
+                  data-lucide="radio"
+                  class="w-4 h-4 text-[var(--hooky-accent)]"
+                ></i>
                 <span>Channel radar</span>
               </h2>
               <p class="text-xs text-slate-400 mt-1">
@@ -922,7 +895,7 @@
           </div>
 
           <div
-            class="p-3.5 bg-[#101110] border border-white/[0.08] rounded-lg flex gap-2"
+            class="p-3.5 bg-[var(--hooky-bg)] border border-white/[0.08] rounded-lg flex gap-2"
           >
             <input
               id="new-channel-input"
@@ -930,13 +903,13 @@
               aria-label="YouTube channel handle or URL"
               type="text"
               placeholder="@creator | limit=2 | min_views=10000 | scan=20"
-              class="flex-1 bg-[#191b18] border border-white/[0.08] rounded-md px-3.5 py-2 text-xs text-white placeholder-slate-500 font-mono focus:outline-none focus:border-white/20"
+              class="flex-1 bg-[var(--hooky-panel)] border border-white/[0.08] rounded-md px-3.5 py-2 text-xs text-white placeholder-slate-500 font-mono focus:outline-none focus:border-white/20"
             />
             <button
               id="channels-add-btn"
               disabled
               onclick="addNewChannel()"
-              class="px-4 py-2 bg-[#242721] hover:bg-[#2b2e38] text-white border border-white/10 rounded-md text-xs font-mono font-medium transition-all"
+              class="px-4 py-2 bg-[var(--hooky-raised)] hover:bg-[#2b2e38] text-white border border-white/10 rounded-md text-xs font-mono font-medium transition-all"
             >
               Add channel
             </button>
@@ -973,22 +946,29 @@
               <h2
                 class="text-base font-semibold text-white flex items-center gap-2"
               >
-                <i data-lucide="folder" class="w-4 h-4 text-[#d2fa69]"></i>
+                <i
+                  data-lucide="folder"
+                  class="w-4 h-4 text-[var(--hooky-accent)]"
+                ></i>
                 <span>Your clips</span>
               </h2>
               <p class="text-xs text-slate-400 mt-1">
-                Rendered MP4 video clips saved in
-                <code class="text-slate-300 font-mono">output/</code>
+                Finished clips saved on your computer.
               </p>
             </div>
-            <button
-              id="outputs-refresh-btn"
-              onclick="loadOutputs()"
-              class="px-3 py-1.5 bg-[#242721] hover:bg-[#2b2e38] text-slate-300 hover:text-white border border-white/10 rounded-md text-xs font-mono flex items-center gap-1.5 transition-all"
-            >
-              <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
-              <span>Refresh</span>
-            </button>
+            <div class="output-actions gallery-actions">
+              <a id="outputs-download-all" hidden download="hooky-clips.zip"
+                >Download all clips</a
+              >
+              <button
+                id="outputs-refresh-btn"
+                onclick="loadOutputs()"
+                class="px-3 py-1.5 bg-[var(--hooky-raised)] hover:bg-[#2b2e38] text-slate-300 hover:text-white border border-white/10 rounded-md text-xs font-mono flex items-center gap-1.5 transition-all"
+              >
+                <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+                <span>Refresh</span>
+              </button>
+            </div>
           </div>
 
           <div class="panel-feedback">
@@ -1002,7 +982,7 @@
           <!-- Video Player Modal / Active Video Card -->
           <div
             id="active-video-player-box"
-            class="hidden p-5 bg-[#101110] border border-white/10 rounded-xl space-y-3"
+            class="hidden p-5 bg-[var(--hooky-bg)] border border-white/10 rounded-xl space-y-3"
           >
             <div class="flex items-center justify-between">
               <span
@@ -1046,7 +1026,10 @@
             <h2
               class="text-base font-semibold text-white flex items-center gap-2"
             >
-              <i data-lucide="activity" class="w-4 h-4 text-[#d2fa69]"></i>
+              <i
+                data-lucide="activity"
+                class="w-4 h-4 text-[var(--hooky-accent)]"
+              ></i>
               <span>System health</span>
             </h2>
             <p class="text-xs text-slate-400 mt-1">

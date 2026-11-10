@@ -354,7 +354,7 @@ function setFramingMode(mode) {
     btn.setAttribute("aria-pressed", String(m === mode));
     if (m === mode) {
       btn.className =
-        "px-2.5 py-0.5 bg-[#242721] text-white font-medium rounded transition-all";
+        "px-2.5 py-0.5 bg-[var(--hooky-raised)] text-white font-medium rounded transition-all";
     } else {
       btn.className =
         "px-2.5 py-0.5 text-slate-400 hover:text-white rounded transition-all";
@@ -373,7 +373,7 @@ function setSubtitleMode(style) {
         btn.setAttribute("aria-pressed", String(s === style));
         if (s === style) {
           btn.className =
-            "px-2.5 py-0.5 bg-[#242721] text-white font-medium rounded transition-all";
+            "px-2.5 py-0.5 bg-[var(--hooky-raised)] text-white font-medium rounded transition-all";
         } else {
           btn.className =
             "px-2.5 py-0.5 text-slate-400 hover:text-white rounded transition-all";
@@ -389,29 +389,29 @@ function applyVisualFramingState() {
   const effectiveMode =
     activeFramingMode === "auto" ? autoDetectedFraming : activeFramingMode;
   const cropBox = document.getElementById("crop-box");
-  const backdrop = document.getElementById("ambient-blur-backdrop");
   const tag = document.getElementById("preview-mode-tag");
 
   if (effectiveMode === "fit") {
     cropBox.style.width = "40%";
     cropBox.style.left = "30%";
-    backdrop.style.opacity = "0.35";
     tag.innerText = "Canvas fit (ambient blur)";
-    document.getElementById("avatar-host").style.opacity = "0.7";
-    document.getElementById("avatar-speaker2").style.opacity = "0.7";
   } else {
     cropBox.style.width = "46%";
     cropBox.style.left = "27%";
-    backdrop.style.opacity = "0.08";
     tag.innerText = "Center crop (solo speaker)";
-    document.getElementById("avatar-host").style.opacity = "0.2";
-    document.getElementById("avatar-speaker2").style.opacity = "0.2";
   }
 }
 
 function switchPreviewMode(mode) {
   clearTimeout(captionTimer);
   currentPreviewMode = mode;
+  const inactive = document.getElementById(
+    mode === "player" ? "canvas-video-frame" : "youtube-embed-frame",
+  );
+  inactive.contentWindow?.postMessage(
+    JSON.stringify({ event: "command", func: "pauseVideo", args: [] }),
+    "https://www.youtube-nocookie.com",
+  );
   scheduleCaptionPreview();
   const isPlayer = mode === "player";
   document.getElementById("preview-play-btn").hidden = isPlayer;
@@ -440,12 +440,12 @@ function switchPreviewMode(mode) {
 
   if (isPlayer) {
     tabPlayer.className =
-      "px-3 py-1 bg-[#242721] text-white font-medium rounded border border-white/10 transition-all";
+      "px-3 py-1 bg-[var(--hooky-raised)] text-white font-medium rounded border border-white/10 transition-all";
     tabCanvas.className =
       "px-3 py-1 text-slate-400 hover:text-white rounded transition-all";
   } else {
     tabCanvas.className =
-      "px-3 py-1 bg-[#242721] text-white font-medium rounded border border-white/10 transition-all";
+      "px-3 py-1 bg-[var(--hooky-raised)] text-white font-medium rounded border border-white/10 transition-all";
     tabPlayer.className =
       "px-3 py-1 text-slate-400 hover:text-white rounded transition-all";
   }
@@ -477,16 +477,31 @@ function updateSelectedHookDetails() {
   const dialogueBox = document.getElementById("dialogue-lines-box");
   const previewElem = document.getElementById("canvas-subtitle-preview");
 
+  const videoId = extractYouTubeId(sourceForHooks);
+  const embedUrl = videoId
+    ? "https://www.youtube-nocookie.com/embed/" +
+      videoId +
+      "?enablejsapi=1" +
+      (hook
+        ? "&start=" + Math.floor(hook.start) + "&end=" + Math.floor(hook.end)
+        : "")
+    : "";
+  for (const player of [
+    iframe,
+    document.getElementById("canvas-video-frame"),
+  ]) {
+    if (embedUrl) {
+      if (player.getAttribute("src") !== embedUrl) player.src = embedUrl;
+    } else player.removeAttribute("src"); // Empty src can reload Studio inside the frame.
+    player.classList.toggle("hidden", !embedUrl);
+  }
+  if (placeholder) {
+    placeholder.classList.toggle("hidden", Boolean(embedUrl));
+    placeholder.querySelector("p").textContent = hook
+      ? "Source playback is unavailable here. Preview captions in the 9:16 canvas, then export to watch your clip."
+      : "Enter a source URL, then detect hooks or run the pipeline.";
+  }
   if (!hook) {
-    if (iframe) {
-      iframe.src = "";
-      iframe.classList.add("hidden");
-    }
-    if (placeholder) {
-      placeholder.classList.remove("hidden");
-      placeholder.querySelector("p").textContent =
-        'No video loaded. Enter a source URL and click "Detect hooks".';
-    }
     if (timeBadge) timeBadge.innerText = "--:-- - --:--";
     if (dialogueBox)
       dialogueBox.innerHTML =
@@ -497,31 +512,6 @@ function updateSelectedHookDetails() {
     return;
   }
 
-  const videoId = extractYouTubeId(sourceForHooks);
-  const embedUrl = videoId
-    ? "https://www.youtube-nocookie.com/embed/" +
-      videoId +
-      "?start=" +
-      Math.floor(hook.start) +
-      "&end=" +
-      Math.floor(hook.end) +
-      "&enablejsapi=1"
-    : "";
-  if (iframe && embedUrl) {
-    if (iframe.getAttribute("src") !== embedUrl) iframe.src = embedUrl;
-    iframe.classList.remove("hidden");
-    if (placeholder) placeholder.classList.add("hidden");
-  } else {
-    if (iframe) {
-      iframe.src = "";
-      iframe.classList.add("hidden");
-    }
-    if (placeholder) {
-      placeholder.classList.remove("hidden");
-      placeholder.querySelector("p").textContent =
-        "Source playback is unavailable here. Preview captions in the 9:16 canvas, then export to watch your clip.";
-    }
-  }
   document.getElementById("timing-start").value = hook.start;
   document.getElementById("timing-end").value = hook.end;
   if (timeBadge) {
@@ -532,7 +522,7 @@ function updateSelectedHookDetails() {
       .map(
         (d) => `
           <div class="flex items-start gap-2 hover:bg-white/[0.04] p-1 rounded transition-colors">
-            <span class="text-[#d2fa69] select-none text-[10px] w-10 shrink-0 font-medium tabular">${escapeHtml(d.time)}</span>
+            <span class="text-[var(--hooky-accent)] select-none text-[10px] w-10 shrink-0 font-medium tabular">${escapeHtml(d.time)}</span>
             <span class="leading-relaxed text-slate-200">${escapeHtml(d.text)}</span>
           </div>
         `,
@@ -574,7 +564,7 @@ function renderSubtitles() {
   } else if (style === "hormozi") {
     styledHTML = `<span class="bg-[#ffff00] text-black px-1.5 py-0.5 font-bold uppercase text-sm">${activeWord}</span>`;
   } else if (style === "emerald") {
-    styledHTML = `<span class="text-white">${escapeHtml(hook.title || "")}</span> <span class="text-[#d2fa69] font-medium underline decoration-1">${activeWord}</span>`;
+    styledHTML = `<span class="text-white">${escapeHtml(hook.title || "")}</span> <span class="text-[var(--hooky-accent)] font-medium underline decoration-1">${activeWord}</span>`;
   } else if (style === "crimson") {
     styledHTML = `<span class="text-[#ef4444] font-medium text-sm">${activeWord}</span>`;
   } else if (style === "minimal") {
@@ -598,7 +588,7 @@ function renderHooksList() {
 
   if (CURRENT_HOOKS.length === 0) {
     container.innerHTML = `
-          <div class="studio-empty p-8 border border-white/[0.08] bg-[#191b18] rounded-lg text-center space-y-3">
+          <div class="studio-empty p-8 border border-white/[0.08] bg-[var(--hooky-panel)] rounded-lg text-center space-y-3">
             <i data-lucide="video" class="w-8 h-8 text-slate-500 mx-auto"></i>
             <div>
               <p class="text-sm font-medium text-slate-300">The next good moment starts here.</p>
@@ -613,8 +603,8 @@ function renderHooksList() {
   container.innerHTML = CURRENT_HOOKS.map((h, idx) => {
     const isSelected = String(h.id) === String(selectedHookId);
     const borderClass = isSelected
-      ? "border-[#d2fa69] bg-[#242721]"
-      : "border-white/[0.08] bg-[#191b18] hover:border-white/20";
+      ? "border-[var(--hooky-accent)] bg-[var(--hooky-raised)]"
+      : "border-white/[0.08] bg-[var(--hooky-panel)] hover:border-white/20";
 
     return `
           <div
@@ -622,14 +612,14 @@ function renderHooksList() {
           >
             <div class="flex items-center justify-between">
               <div class="flex items-center gap-2">
-                <span class="w-5 h-5 grid place-items-center bg-[#101110] text-slate-400 font-mono text-[10px] rounded border border-white/10">0${idx + 1}</span>
+                <span class="w-5 h-5 grid place-items-center bg-[var(--hooky-bg)] text-slate-400 font-mono text-[10px] rounded border border-white/10">0${idx + 1}</span>
                 <span class="text-[11px] font-mono px-2 py-0.5 bg-white/5 text-slate-300 border border-white/10 rounded">
                   ${escapeHtml(h.category || "AI-selected")}
                 </span>
               </div>
               <div class="flex items-center gap-1 font-mono text-xs tabular">
-                <span class="text-[#d2fa69] font-medium">${escapeHtml(h.retention_score)}%</span>
-                <span class="text-slate-500 text-[10px]">AI score</span>
+                <span class="text-[var(--hooky-accent)] font-medium">${escapeHtml(h.retention_score)}%</span>
+                <span class="text-slate-500 text-[10px]">Hook score</span>
               </div>
             </div>
 
@@ -648,7 +638,7 @@ function renderHooksList() {
               </span>
               <button
                 data-export-hook="true" ${activeJobId || jobStarting || jobsLoading || jobsFailed || sourceForHooks !== document.getElementById("source-url").value.trim() ? "disabled" : ""} data-hook-id="${escapeHtml(h.id)}" onclick="event.stopPropagation(); renderSingleHookById(this.dataset.hookId)"
-                class="px-2.5 py-1 bg-[#242721] hover:bg-white hover:text-black border border-white/10 text-white rounded transition-all"
+                class="px-2.5 py-1 bg-[var(--hooky-raised)] hover:bg-white hover:text-black border border-white/10 text-white rounded transition-all"
               >
                 Export reel →
               </button>
@@ -773,6 +763,7 @@ function escapeHtml(value) {
 function appendConsoleLog(msg) {
   if (/\[[^\]]*error\]/i.test(msg)) {
     const alert = document.getElementById("studio-alert");
+    alert.dataset.state = "error";
     alert.textContent = String(msg).replace(/^\[[^\]]*error\]\s*/i, "");
     alert.classList.remove("hidden");
   }
@@ -879,6 +870,7 @@ function rememberJob(job) {
 function showJob(job) {
   job = { ...jobs.find((existing) => existing.id === job.id), ...job };
   document.getElementById("pipeline-stepper").classList.remove("hidden");
+  document.getElementById("pipeline-stepper").dataset.state = job.status;
   document.getElementById("active-task-id").textContent = job.id;
   document.getElementById("stepper-status-text").textContent =
     job.status + ": " + (job.step || job.type || "Working");
@@ -893,6 +885,11 @@ function showJob(job) {
   while (jobLogOffsets.size > 100)
     jobLogOffsets.delete(jobLogOffsets.keys().next().value);
   rememberJob(job);
+  if (
+    job.result?.hooks?.length &&
+    (selectedAnalysisId !== job.id || !CURRENT_HOOKS.length)
+  )
+    hydrateAnalysis(job);
 }
 function hydrateAnalysis(job, restoreEdits = false) {
   const source = job.url || job.target || job.result?.url || "";
@@ -931,8 +928,32 @@ function hydrateAnalysis(job, restoreEdits = false) {
 }
 async function finishJob(job) {
   job = { ...jobs.find((existing) => existing.id === job.id), ...job };
-  if (job.type === "analyze" && job.status === "completed")
+  if (
+    job.result?.hooks?.length &&
+    (selectedAnalysisId !== job.id || !CURRENT_HOOKS.length)
+  )
     hydrateAnalysis(job);
+  if (job.status === "completed") {
+    const alert = document.getElementById("studio-alert");
+    alert.dataset.state = "success";
+    alert.replaceChildren(
+      document.createTextNode(
+        job.type === "analyze"
+          ? "Hooks ready. Select a moment to export."
+          : "Export complete. Your clips are saved.",
+      ),
+    );
+    if (job.type !== "analyze") {
+      const folder = document.createElement("button"),
+        clips = document.createElement("button");
+      folder.textContent = "Open folder";
+      folder.onclick = () => openOutputFolder(job.output_file, job.id, folder);
+      clips.textContent = "View clips";
+      clips.onclick = () => switchTab("gallery");
+      alert.append(folder, clips);
+    }
+    alert.classList.remove("hidden");
+  }
   if (job.status === "failed")
     appendConsoleLog(
       "[job error] " + (job.error || "Job failed. Review the logs and retry."),
@@ -1110,6 +1131,14 @@ async function startJob(type, endpoint, payload) {
     });
     if (!data.job_id) throw new Error("Server did not return a valid job ID");
     activeJobId = data.job_id;
+    if (type === "make" || type === "analyze") {
+      sourceForHooks = payload.url || payload.target;
+      CURRENT_HOOKS = [];
+      selectedHookId = selectedAnalysisId = null;
+      currentSourceVideoTitle = "";
+      renderHooksList();
+      updateSelectedHookDetails();
+    }
     showJob({
       id: activeJobId,
       type,
@@ -1606,6 +1635,9 @@ async function loadOutputs() {
     const data = await apiJson("/api/outputs");
     if (!Array.isArray(data.files)) throw new Error("Invalid gallery response");
     const files = data.files;
+    const downloadAll = document.getElementById("outputs-download-all");
+    downloadAll.hidden = !files.length;
+    downloadAll.href = outputVideoUrl("", "/api/outputs/download-all");
     document.getElementById("gallery-count").textContent = files.length;
     const container = document.getElementById("outputs-grid");
     container.replaceChildren();
@@ -1625,6 +1657,20 @@ async function loadOutputs() {
           grid = document.createElement("div");
         group.className = "output-collection";
         heading.textContent = folder.name;
+        const folderActions = document.createElement("div"),
+          open = document.createElement("button");
+        folderActions.className = "output-actions";
+        open.textContent = "Open folder";
+        const first = folder.files?.[0];
+        open.onclick = () =>
+          openOutputFolder(
+            first?.rel_path,
+            first?.url
+              ? new URL(first.url, location.href).searchParams.get("job_id")
+              : null,
+            open,
+          );
+        folderActions.append(open);
         grid.className = "output-card-grid";
         (folder.files || []).forEach((file) => {
           const card = document.createElement("article"),
@@ -1651,7 +1697,7 @@ async function loadOutputs() {
           card.append(name, meta, actions);
           grid.append(card);
         });
-        group.append(heading, grid);
+        group.append(heading, folderActions, grid);
         container.append(group);
       });
     }
@@ -1673,6 +1719,24 @@ async function loadOutputs() {
   } finally {
     outputsLoading = false;
     document.getElementById("outputs-refresh-btn").disabled = false;
+  }
+}
+
+async function openOutputFolder(filepath, jobId, button) {
+  if (button) button.disabled = true;
+  const query = new URLSearchParams();
+  if (filepath) query.set("filepath", filepath);
+  if (jobId) query.set("job_id", jobId);
+  try {
+    await apiJson("/api/outputs/open-folder?" + query, { method: "POST" });
+    document.getElementById("outputs-status").textContent =
+      "Opened your clips folder.";
+  } catch (error) {
+    document.getElementById("outputs-status").textContent = error.message;
+    document.getElementById("outputs-status").dataset.state = "error";
+    appendConsoleLog("[folder error] " + error.message);
+  } finally {
+    if (button) button.disabled = false;
   }
 }
 
@@ -1754,9 +1818,9 @@ async function loadDoctorReport() {
     container.innerHTML = checks
       .map(
         (c) => `
-          <div class="p-3 bg-[#191b18] border border-white/[0.08] rounded-md flex items-center justify-between text-xs font-mono">
+          <div class="p-3 bg-[var(--hooky-panel)] border border-white/[0.08] rounded-md flex items-center justify-between text-xs font-mono">
             <div class="flex items-center gap-2">
-              <span class="${c.ok ? "text-[#d2fa69]" : c.required === false ? "text-slate-400" : "text-red-400"} font-medium">
+              <span class="${c.ok ? "text-[var(--hooky-accent)]" : c.required === false ? "text-slate-400" : "text-red-400"} font-medium">
                 ${c.ok ? "✓ pass" : c.required === false ? "optional" : "✗ fail"}
               </span>
               <span class="text-white font-medium">${escapeHtml(c.name)}</span>

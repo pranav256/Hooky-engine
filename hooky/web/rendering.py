@@ -13,6 +13,7 @@ from hooky.core.cutter import cut_clip
 from hooky.core.downloader import _format_string, _pick_height, yt_dlp_auth_args
 from hooky.core.source_text import caption_words
 from hooky.core.subtitles import build_ass
+from hooky.core.utils import format_timestamp
 from hooky.web.analyzer import extract_youtube_id, prepare_source, extract_ranked_scenes
 
 
@@ -83,6 +84,12 @@ async def make_url(payload: dict, job: dict, cache: Path) -> list[str]:
                                   max_clips=min(10, max(4, int(duration // 240) + 1)) if duration else 6)
     if not hooks:
         raise RuntimeError("No usable speech clips were found; analyze another source or select a clip manually.")
+    job["result"] = {
+        "status": "success", "url": url, "video_title": metadata.get("title", "Video"),
+        "video_id": metadata.get("id") or extract_youtube_id(url), "duration_fmt": format_timestamp(duration),
+        "recommended_framing": payload["framing"], "recommended_style": payload["style"],
+        "hooks": [{**hook, "duration": f"{hook['end'] - hook['start']:.1f}s"} for hook in hooks],
+    }
     outputs = []
     job["status"] = "running"
     for index, hook in enumerate(hooks, 1):

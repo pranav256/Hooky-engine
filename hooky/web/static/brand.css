@@ -1,53 +1,79 @@
-/* Hooky shared identity. Synced to the local studio by scripts/sync-studio-brand.mjs. */
-@font-face {
-  font-family: Space Grotesk;
-  src: url("/static/fonts/space-grotesk.woff2") format("woff2");
-  font-weight: 300 700;
-  font-style: normal;
-  font-display: swap;
-}
-@font-face {
-  font-family: Inter;
-  src: url("/static/fonts/inter.woff2") format("woff2");
-  font-weight: 100 900;
-  font-style: normal;
-  font-display: swap;
-}
-@font-face {
-  font-family: IBM Plex Mono;
-  src: url("/static/fonts/ibm-plex-mono.woff2") format("woff2");
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-}
+/* Lumen Dark tokens from Open Design. Shared with local Studio. */
 :root {
   color-scheme: dark;
-  --hooky-bg: #101110;
-  --hooky-deep: #0a0b0a;
-  --hooky-panel: #191b18;
-  --hooky-raised: #242721;
-  --hooky-text: #f3f5ec;
-  --hooky-secondary: #b0b5a8;
-  --hooky-muted: #969d8b;
-  --hooky-accent: #d2fa69;
-  --hooky-violet: #b8a0fc;
-  --hooky-line: #30342a;
-  --hooky-radius: 12px;
-  --hooky-sans: Inter, Arial, sans-serif;
-  --hooky-display: "Space Grotesk", Inter, Arial, sans-serif;
-  --hooky-mono: "IBM Plex Mono", Consolas, monospace;
+  --lumen-background: oklch(0.14 0 0);
+  --lumen-foreground: oklch(0.97 0.01 85);
+  --lumen-card: oklch(0.17 0 0);
+  --lumen-card-foreground: oklch(0.97 0.01 85);
+  --lumen-popover: oklch(0.19 0 0);
+  --lumen-popover-foreground: oklch(0.97 0.01 85);
+  --lumen-primary: oklch(0.78 0.14 85);
+  --lumen-primary-foreground: oklch(0.16 0.02 85);
+  --lumen-secondary: oklch(0.22 0 0);
+  --lumen-secondary-foreground: oklch(0.85 0 0);
+  --lumen-muted: oklch(0.2 0 0);
+  --lumen-muted-foreground: oklch(0.6 0 0);
+  --lumen-accent: oklch(0.25 0.015 85);
+  --lumen-accent-foreground: oklch(0.97 0.01 85);
+  --lumen-destructive: oklch(0.64 0.22 25);
+  --lumen-destructive-foreground: oklch(0.97 0 0);
+  --lumen-border: oklch(1 0 0 / 0.08);
+  --lumen-input: oklch(1 0 0 / 0.06);
+  --lumen-ring: oklch(0.78 0.14 85);
+  --lumen-radius: 0.5rem;
+  --lumen-shadow-xs:
+    inset 0 0.0625rem 0 rgba(255, 255, 255, 0.03),
+    0 0.0625rem 0.0625rem rgba(0, 0, 0, 0.35),
+    0 0.0625rem 0.125rem rgba(0, 0, 0, 0.15);
+  --lumen-shadow-sm:
+    inset 0 0.0625rem 0 rgba(255, 255, 255, 0.05),
+    0 0.0625rem 0.125rem rgba(0, 0, 0, 0.4),
+    0 0.125rem 0.25rem rgba(0, 0, 0, 0.2);
+  --lumen-shadow-md:
+    inset 0 0.0625rem 0 rgba(255, 255, 255, 0.08),
+    0 0.125rem 0.25rem rgba(0, 0, 0, 0.5), 0 0.25rem 0.5rem rgba(0, 0, 0, 0.25);
+  --lumen-shadow-lg:
+    inset 0 0.0625rem 0 rgba(255, 255, 255, 0.12),
+    0 0.25rem 0.5rem rgba(0, 0, 0, 0.6), 0 0.5rem 1rem rgba(0, 0, 0, 0.3);
+  --lumen-shadow-xl:
+    inset 0 0.0625rem 0 rgba(255, 255, 255, 0.18),
+    0 0.5rem 1rem rgba(0, 0, 0, 0.7), 0 1rem 2rem rgba(0, 0, 0, 0.35);
+  --lumen-shadow-inset:
+    inset 0 0.0625rem 0.125rem rgba(0, 0, 0, 0.35),
+    inset 0 -0.0625rem 0 rgba(255, 255, 255, 0.03);
+  --lumen-shadow-primary:
+    inset 0 0.0625rem 0 rgba(255, 255, 255, 0.25),
+    0 0 0 0.0625rem rgba(255, 200, 100, 0.2),
+    0 0.125rem 0.25rem rgba(0, 0, 0, 0.5),
+    0 0.25rem 0.75rem rgba(240, 170, 60, 0.18);
+  --hooky-bg: var(--lumen-background);
+  --hooky-deep: var(--lumen-background);
+  --hooky-panel: var(--lumen-card);
+  --hooky-raised: var(--lumen-secondary);
+  --hooky-text: var(--lumen-foreground);
+  --hooky-secondary: var(--lumen-secondary-foreground);
+  --hooky-muted: var(--lumen-muted-foreground);
+  --hooky-accent: var(--lumen-primary);
+  --hooky-violet: var(--lumen-secondary-foreground);
+  --hooky-line: var(--lumen-border);
+  --hooky-radius: var(--lumen-radius);
+  --hooky-sans:
+    system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --hooky-display: var(--hooky-sans);
+  --hooky-mono: ui-monospace, Consolas, monospace;
+  --hooky-success: #9adeac;
   --bg-deep: var(--hooky-deep);
   --bg-page: var(--hooky-bg);
   --card: var(--hooky-panel);
   --raised: var(--hooky-raised);
-  --raised-hover: #32372c;
+  --raised-hover: var(--lumen-accent);
   --hairline: var(--hooky-line);
-  --hairline-hover: #515b3d;
+  --hairline-hover: oklch(1 0 0 / 0.25);
   --text-primary: var(--hooky-text);
   --text-secondary: var(--hooky-secondary);
   --text-muted: var(--hooky-muted);
   --accent: var(--hooky-accent);
-  --accent-dim: #d2fa6912;
+  --accent-dim: color-mix(in srgb, var(--hooky-accent) 8%, transparent);
   --danger: #ff8080;
   --font-sans: var(--hooky-sans);
   --font-mono: var(--hooky-mono);

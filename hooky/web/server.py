@@ -9,6 +9,7 @@ import hmac
 import asyncio
 import math
 import tempfile
+import zipfile
 from pathlib import Path
 from typing import Any
 from contextlib import asynccontextmanager
@@ -18,6 +19,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.background import BackgroundTask
 
 from hooky.config import PROJECT_ROOT, ENV_FILE, DOTENV_KEYS
 from hooky import __version__
@@ -25,6 +27,7 @@ from hooky.dotenv import parse_dotenv, dump_dotenv, validate_settings, SECRET_KE
 from hooky.setup.storage import write_env, SetupStorageError
 from hooky.web.jobs import JobManager, prune_cache
 from hooky.doctor import dependency_checks
+from hooky.desktop import open_path
 from hooky.core.subtitles import STYLES
 from hooky.core.utils import validate_video_url
 
@@ -417,7 +420,7 @@ async def list_outputs():
                         "size_mb": round(stat.st_size / (1024 * 1024), 2), "mtime": stat.st_mtime,
                         "url": f"/api/outputs/{quote(relative)}" + (f"?job_id={job_id}" if job_id else "")}
                 files.append(item)
-                entry = folders.setdefault((root, folder), {"name": folder, "folder_key": folder, "files": [], "latest_mtime": 0})
+                entry = folders.setdefault((root, path.parent), {"name": folder, "folder_key": folder, "files": [], "latest_mtime": 0})
                 entry["files"].append(item)
                 entry["latest_mtime"] = max(entry["latest_mtime"], stat.st_mtime)
         files.sort(key=lambda item: item["mtime"], reverse=True)
@@ -428,15 +431,59 @@ async def list_outputs():
     return await asyncio.to_thread(scan)
 
 
-@app.get("/api/outputs/{filepath:path}")
-async def serve_output_file(filepath: str, job_id: str | None = None):
+def _output_root(job_id: str | None = None) -> Path:
     if job_id:
         job = _job_manager().jobs.get(job_id)
         if not job or not job.get("output_root"):
             raise HTTPException(status_code=404, detail="Output job not found")
-        root = Path(job["output_root"]).resolve()
+        return Path(job["output_root"]).resolve()
+    return _configured_path("OUTPUT_DIR").resolve()
+
+
+@app.post("/api/outputs/open-folder")
+async def open_output_folder(filepath: str | None = None, job_id: str | None = None):
+    root = _output_root(job_id)
+    if filepath:
+        path = root / filepath
+        if not _public_output(path, root):
+            raise HTTPException(status_code=404, detail="Clip not found")
+        folder = path.resolve().parent
     else:
-        root = _configured_path("OUTPUT_DIR").resolve()
+        folder = root
+    if not folder.is_dir():
+        raise HTTPException(status_code=404, detail="No output folder yet. Export a clip first.")
+    if not await asyncio.to_thread(open_path, folder):
+        raise HTTPException(status_code=500, detail="Could not open the output folder. Check your desktop file manager.")
+    return {"status": "opened"}
+
+
+@app.get("/api/outputs/download-all")
+async def download_all_outputs():
+    roots = _output_roots()
+    def archive():
+        files = [(index, root, path) for index, root in enumerate(roots, 1)
+                 for path in root.glob("**/*.mp4") if _public_output(path, root)]
+        if not files:
+            raise HTTPException(status_code=404, detail="No finished clips to download")
+        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as temporary:
+            destination = Path(temporary.name)
+        try:
+            # MP4s are already compressed; store them without wasting CPU on recompression.
+            with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_STORED) as bundle:
+                for index, root, path in files:
+                    bundle.write(path, f"output-{index}/{path.relative_to(root).as_posix()}")
+        except BaseException:
+            destination.unlink(missing_ok=True)
+            raise
+        return destination
+    destination = await asyncio.to_thread(archive)
+    return FileResponse(destination, media_type="application/zip", filename="hooky-clips.zip",
+                        background=BackgroundTask(destination.unlink, missing_ok=True))
+
+
+@app.get("/api/outputs/{filepath:path}")
+async def serve_output_file(filepath: str, job_id: str | None = None):
+    root = _output_root(job_id)
     path = root / filepath
     if _public_output(path, root):
         return FileResponse(path, media_type="video/mp4")

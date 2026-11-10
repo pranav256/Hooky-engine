@@ -1,4 +1,6 @@
 import time
+import io
+import zipfile
 
 import pytest
 from unittest.mock import AsyncMock, Mock
@@ -67,7 +69,7 @@ def test_index_assets_are_served_locally():
         assert response.status_code == 200, asset
         assert response.content
     fonts = re.findall(r"url\(['\"]?([^)'\"]+)", fresh_client.get("/static/brand.css").text)
-    assert fonts
+    assert "system-ui" in fresh_client.get("/static/brand.css").text
     for font in fonts:
         assert fresh_client.get(font if font.startswith("/") else "/static/" + font).status_code == 200
 
@@ -152,6 +154,59 @@ def test_outputs_endpoint():
     assert response.status_code == 200
     data = response.json()
     assert "files" in data
+
+
+def test_download_all_keeps_finished_clips_and_cleans_archive(monkeypatch):
+    current = server.PROJECT_ROOT / "output"
+    old = server.PROJECT_ROOT / "old-output"
+    for root in (current, old):
+        (root / "session").mkdir(parents=True)
+        (root / "session/reel.mp4").write_bytes(b"video" * 400)
+        (root / "session/reel.tmp.mp4").write_bytes(b"unfinished" * 400)
+        (root / "session/snippet_source.mp4").write_bytes(b"source" * 400)
+    server._job_manager().jobs["saved"] = {"id": "saved", "output_root": str(old), "output_file": "session/reel.mp4"}
+    temporary = server.tempfile.NamedTemporaryFile
+    created = []
+    def track_archive(**kwargs):
+        file = temporary(dir=server.PROJECT_ROOT, **kwargs)
+        created.append(file.name)
+        return file
+    monkeypatch.setattr(server.tempfile, "NamedTemporaryFile", track_archive)
+    assert TestClient(app).get("/api/outputs/download-all").status_code == 401
+    response = client.get("/api/outputs/download-all")
+    assert response.status_code == 200
+    assert 'filename="hooky-clips.zip"' in response.headers["content-disposition"]
+    with zipfile.ZipFile(io.BytesIO(response.content)) as bundle:
+        assert bundle.namelist() == ["output-1/session/reel.mp4", "output-2/session/reel.mp4"]
+        assert all(bundle.read(name) == b"video" * 400 for name in bundle.namelist())
+    assert created and not any(server.Path(path).exists() for path in created)
+    monkeypatch.setattr(server.zipfile.ZipFile, "write", Mock(side_effect=OSError("Disk full")))
+    with pytest.raises(OSError, match="Disk full"):
+        client.get("/api/outputs/download-all")
+    assert not any(server.Path(path).exists() for path in created)
+
+
+def test_output_folder_only_opens_trusted_current_or_historical_clips(monkeypatch):
+    root = server.PROJECT_ROOT / "previous"
+    (root / "session").mkdir(parents=True)
+    (root / "session/reel.mp4").write_bytes(b"video" * 400)
+    server._job_manager().jobs["saved"] = {"id": "saved", "output_root": str(root), "output_file": "session/reel.mp4"}
+    opener = Mock(return_value=True)
+    monkeypatch.setattr(server, "open_path", opener)
+    endpoint = "/api/outputs/open-folder"
+    assert TestClient(app).post(endpoint).status_code == 401
+    assert client.post(endpoint, params={"job_id": "saved", "filepath": "session/reel.mp4"}).status_code == 200
+    opener.assert_called_once_with(root / "session")
+    for filepath in ("../outside.mp4", str(server.PROJECT_ROOT / "outside.mp4"), "session/reel.tmp.mp4", ".env"):
+        assert client.post(endpoint, params={"job_id": "saved", "filepath": filepath}).status_code == 404
+    assert opener.call_count == 1
+    assert client.post(endpoint, params={"job_id": "missing"}).status_code == 404
+    opener.return_value = False
+    assert client.post(endpoint, params={"job_id": "saved"}).status_code == 500
+
+
+def test_download_all_empty_gallery():
+    assert client.get("/api/outputs/download-all").status_code == 404
 
 
 def test_env_roundtrip():
