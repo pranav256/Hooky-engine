@@ -11,6 +11,7 @@
     <link rel="stylesheet" href="/static/studio.css" />
     <script defer src="/static/lucide.min.js"></script>
     <script defer src="/static/studio.js"></script>
+    <script defer src="/static/projects.js"></script>
 
     <script>
       window.__HOOKY_TOKEN__ = "HOOKY_AUTH_TOKEN_PLACEHOLDER";
@@ -134,6 +135,28 @@
           >
             Dismiss
           </button>
+        </div>
+
+        <div class="project-panel brutal-card" role="region" aria-labelledby="projects-heading">
+          <h2 id="projects-heading">Projects</h2>
+          <p id="projects-help">Saved on this computer. Reopen moments and edits anytime.</p>
+          <div class="project-row">
+            <div class="project-field">
+              <label for="project-name">Project name</label>
+              <input id="project-name" maxlength="100" placeholder="For example: Founder interview" aria-describedby="project-status" oninput="this.removeAttribute('aria-invalid'); projectMessage = ''; persistStudio()" />
+            </div>
+            <button id="project-save" onclick="saveProject()">Save project</button>
+            <button id="project-copy" onclick="saveProject(true)">Save as new</button>
+          </div>
+          <div class="project-row">
+            <div class="project-field">
+              <label for="project-list">Saved projects</label>
+              <select id="project-list" onchange="updateProjectControls()" aria-describedby="project-status"><option value="">No saved projects yet</option></select>
+            </div>
+            <button id="project-open" onclick="openProject()">Open project</button>
+            <button id="project-refresh" onclick="loadProjects()">Refresh list</button>
+          </div>
+          <p id="project-status" role="status" aria-live="polite">Loading projects…</p>
         </div>
 
         <!-- ==================== TOP COMMAND & CONTROLS TOOLBAR ==================== -->

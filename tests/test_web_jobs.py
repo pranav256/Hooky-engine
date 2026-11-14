@@ -82,7 +82,8 @@ def running(pid):
 
 
 async def wait_result(job):
-    deadline = time.monotonic() + 5
+    # Cold imports and descendant startup vary with machine load; this is not a speed check.
+    deadline = time.monotonic() + 15
     while not job.get("result"):
         assert time.monotonic() < deadline, job
         await asyncio.sleep(0.01)

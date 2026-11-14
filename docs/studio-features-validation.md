@@ -15,4 +15,4 @@ Validation evidence:
 
 Browser checks use intercepted API fixtures against an isolated local Studio server. They do not claim live Gemini or YouTube integration coverage. Caption preview remains a styling simulator, not a frame-accurate render preview. Topic searches may require several Gemini requests on long recordings. Current-browser session saving can fail if storage is unavailable, and the UI reports that edits are then kept for the session only.
 
-No paid model calls, real account uploads, screen-reader walkthrough or GPU workload was exercised. Export packs, named projects, batch selection, new output formats, silence cleanup, translations and speaker tracking remain deferred.
+No paid model calls, real account uploads, screen-reader walkthrough or GPU workload was exercised. Export packs, batch selection, new output formats, silence cleanup, translations and speaker tracking remain deferred. Named projects were subsequently added; see `docs/studio-projects-validation.md`.

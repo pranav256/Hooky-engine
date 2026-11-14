@@ -1471,3 +1471,17 @@ button[hidden],
 .caption-phrase label { color: var(--hooky-secondary); font-size: 0.75rem; }
 .caption-phrase textarea { display: block; resize: vertical; line-height: 1.5; }
 .caption-phrase textarea[aria-invalid="true"] { border-color: var(--danger); }
+
+.project-panel { display: grid; gap: 0.75rem; padding: 1rem; margin-bottom: 1rem; }
+.project-panel h2 { margin: 0; font-size: 0.875rem; font-weight: 600; }
+.project-panel p { margin: 0; color: var(--hooky-secondary); font-size: 0.75rem; overflow-wrap: anywhere; }
+.project-row { display: flex; gap: 0.5rem; align-items: end; flex-wrap: wrap; }
+.project-field { flex: 1 1 16rem; min-width: 0; display: grid; gap: 0.5rem; }
+.project-field label { color: var(--hooky-text); font-size: 0.75rem; }
+.project-field input, .project-field select, .project-row button {
+  min-height: 2.75rem; padding: 0.5rem 0.75rem; border: 0.0625rem solid var(--hooky-line);
+  border-radius: var(--hooky-radius); color: var(--hooky-text); background: var(--hooky-bg);
+}
+.project-field input, .project-field select { width: 100%; min-width: 0; }
+.project-row button { background: var(--hooky-raised); }
+.project-field input[aria-invalid="true"] { border-color: var(--danger); }

@@ -163,19 +163,22 @@ function persistStudio() {
   } catch {
     sourceSafe = "";
   }
-  const edits = CURRENT_HOOKS.slice(0, 100).map((hook) => ({
+  const edits = CURRENT_HOOKS.length ? CURRENT_HOOKS.slice(0, 100).map((hook) => ({
     id: hook.id,
     start: hook.start,
     end: hook.end,
     caption_edits: hook.caption_edits || [],
-  }));
+  })) : (selectedAnalysisId || currentProject ? window._restoredTiming || [] : []);
   if (CURRENT_HOOKS.length) window._restoredTiming = edits;
+  updateProjectControls();
   try {
     localStorage.setItem(
       "hooky_studio_v1",
       JSON.stringify({
         source: sourceSafe,
         topic: document.getElementById("clip-topic").value,
+        project: currentProject,
+        projectName: document.getElementById("project-name").value,
         selectedAnalysisId,
         edits,
         selected: selectedHookId,
@@ -199,6 +202,9 @@ function restoreStudio() {
     document.getElementById("source-url").value =
       typeof saved.source === "string" ? saved.source : "";
     document.getElementById("clip-topic").value = typeof saved.topic === "string" ? saved.topic.slice(0, 500) : "";
+    if (saved.project && /^[0-9a-f]{32}$/.test(saved.project.id) && Number.isInteger(saved.project.revision))
+      currentProject = { id: saved.project.id, revision: saved.project.revision, name: String(saved.project.name || "").slice(0, 100) };
+    document.getElementById("project-name").value = typeof saved.projectName === "string" ? saved.projectName.slice(0, 100) : "";
     selectedAnalysisId = saved.selectedAnalysisId || null;
     selectedHookId = saved.selected;
     activeJobId = saved.activeJobId || null;
@@ -321,7 +327,7 @@ document.addEventListener("DOMContentLoaded", () => {
   loadChannels();
   loadOutputs();
   loadEnvConfig();
-  loadJobs();
+  loadProjects(true).finally(loadJobs);
   updateOnboarding();
 });
 
@@ -857,7 +863,7 @@ function toggleTerminalLogs() {
 // ==================== ENGINE API CALLS ====================
 
 function updateJobControls() {
-  const busy = jobStarting || Boolean(activeJobId) || jobsLoading || jobsFailed;
+  const busy = jobStarting || Boolean(activeJobId) || jobsLoading || jobsFailed || projectLoading;
   const changedSource =
     sourceForHooks !== document.getElementById("source-url").value.trim();
   document.getElementById("source-state").textContent =
@@ -869,8 +875,10 @@ function updateJobControls() {
   document.getElementById("top-render-btn").disabled =
     busy || !CURRENT_HOOKS.length || changedSource;
   document.getElementById("source-url").disabled =
-    jobStarting || Boolean(activeJobId);
-  document.getElementById("clip-topic").disabled = jobStarting || Boolean(activeJobId);
+    jobStarting || Boolean(activeJobId) || projectLoading;
+  document.getElementById("clip-topic").disabled = jobStarting || Boolean(activeJobId) || projectLoading;
+  document.querySelectorAll(".studio-overrides button, .hook-select, #timing-start, #timing-end").forEach((control) => { control.disabled = projectLoading; });
+  updateProjectControls();
   document.querySelectorAll(".caption-phrase textarea").forEach((field) => { field.disabled = busy || changedSource; });
   document.getElementById("caption-reset").disabled = busy || changedSource || !CURRENT_HOOKS.find((h) => String(h.id) === String(selectedHookId))?.caption_edits?.length;
   document
@@ -911,6 +919,8 @@ function renderJobHistory() {
       restore.textContent = "Open analysis";
       restore.disabled = Boolean(activeJobId);
       restore.onclick = () => {
+        if (currentProject && !confirmProjectChange("Open this analysis?")) return;
+        detachProject();
         hydrateAnalysis(job);
         switchTab("studio");
       };
@@ -973,6 +983,8 @@ function hydrateAnalysis(job, restoreEdits = false) {
     ? job.result.hooks.slice(0, 100).map((hook) => ({ ...hook }))
     : [];
   currentSourceVideoTitle = job.result?.video_title || "";
+  if (!currentProject && !document.getElementById("project-name").value)
+    document.getElementById("project-name").value = currentSourceVideoTitle.slice(0, 100);
   currentAnalysisTopic = job.result?.topic || job.request?.topic || "";
   analysisNotice = job.result?.notice || "";
   document.getElementById("clip-topic").value = currentAnalysisTopic;
@@ -1198,7 +1210,8 @@ async function cancelJob(id = activeJobId) {
   }
 }
 async function startJob(type, endpoint, payload) {
-  if (jobStarting || activeJobId || jobsLoading || jobsFailed) return;
+  if (jobStarting || activeJobId || jobsLoading || jobsFailed || projectLoading) return;
+  if ((type === "make" || type === "analyze") && currentProject && !confirmProjectChange("Analyze a new source?")) return;
   document.getElementById("studio-alert").classList.add("hidden");
   jobStarting = true;
   updateJobControls();
@@ -1211,6 +1224,7 @@ async function startJob(type, endpoint, payload) {
     if (!data.job_id) throw new Error("Server did not return a valid job ID");
     activeJobId = data.job_id;
     if (type === "make" || type === "analyze") {
+      detachProject();
       sourceForHooks = payload.url || payload.target;
       CURRENT_HOOKS = [];
       selectedHookId = selectedAnalysisId = null;
@@ -1709,7 +1723,7 @@ async function saveActiveChannels() {
 }
 
 window.addEventListener("beforeunload", (event) => {
-  if (channelsDirty() || envDirty) {
+  if (channelsDirty() || envDirty || (currentProject && projectDirty())) {
     event.preventDefault();
     event.returnValue = "";
   }

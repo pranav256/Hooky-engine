@@ -1,6 +1,7 @@
 import time
 import io
 import zipfile
+import json
 
 import pytest
 from unittest.mock import AsyncMock, Mock
@@ -89,6 +90,7 @@ def test_index_assets_are_served_locally():
     index = fresh_client.get("/")
     assets = set(re.findall(r'(?:src|href)="(/static/[^\"]+)"', index.text))
     assert "/static/studio.js" in assets
+    assert "/static/projects.js" in assets
     for asset in assets:
         response = fresh_client.get(asset)
         assert response.status_code == 200, asset
@@ -641,3 +643,103 @@ def test_omitted_job_style_uses_default_after_saved_blank_normalization(endpoint
     assert started.status_code == 200
     job = server._JOBS[started.json()["job_id"]]
     assert job["request"]["style"] == "gold"
+
+
+@pytest.fixture
+def project_payload():
+    return {"name": "Founder interview", "studio": {
+        "url": "https://example.com/video", "topic": "founder advice", "video_title": "Our first company",
+        "selected_hook": "hook_1", "framing": "fit", "subtitle": "clean", "hooks": [{
+            "id": "hook_1", "title": "Ask customers", "start": 1.5, "end": 12.5,
+            "cues": [{"start": 1, "end": 5, "text": "Original name"}],
+            "caption_edits": [{"start": 1, "end": 5, "text": "Corrected name"}],
+        }],
+    }}
+
+
+def test_projects_survive_history_cleanup_and_server_reopen(project_payload, monkeypatch):
+    created = client.post("/api/projects", json=project_payload)
+    assert created.status_code == 200
+    project = created.json()
+    assert project["version"] == project["revision"] == 1
+    directory = server._job_manager().directory.parent / "web_projects"
+    assert (directory / (project["id"] + ".json")).is_file()
+    server._JOBS.clear()
+    monkeypatch.setattr(server, "_MANAGER", None)
+    reopened = client.get("/api/projects/" + project["id"])
+    assert reopened.json() == project
+    assert reopened.json()["studio"]["hooks"][0]["caption_edits"][0]["text"] == "Corrected name"
+    assert reopened.json()["studio"]["hooks"][0]["cues"][0]["text"] == "Original name"
+    assert client.get("/api/projects").json()["projects"][0]["id"] == project["id"]
+    assert not server._JOBS
+
+
+def test_project_rename_and_stale_save_preserve_newer_version(project_payload):
+    first = client.post("/api/projects", json=project_payload).json()
+    project_payload.update(name="Renamed interview", revision=1)
+    updated = client.put("/api/projects/" + first["id"], json=project_payload)
+    assert updated.status_code == 200 and updated.json()["revision"] == 2
+    assert updated.json()["created_at"] == first["created_at"]
+    project_payload["name"] = "Stale tab"
+    conflict = client.put("/api/projects/" + first["id"], json=project_payload)
+    assert conflict.status_code == 409
+    assert client.get("/api/projects/" + first["id"]).json()["name"] == "Renamed interview"
+    copy = client.post("/api/projects", json=project_payload).json()
+    assert copy["id"] != first["id"] and copy["revision"] == 1
+
+
+@pytest.mark.parametrize("damage", ["name", "url", "credentials", "selected", "range", "style", "edits", "cues", "duplicate"])
+def test_invalid_project_snapshots_are_never_saved(project_payload, damage):
+    studio = project_payload["studio"]
+    if damage == "name": project_payload["name"] = " "
+    elif damage == "url": studio["url"] = "file:///private"
+    elif damage == "credentials": studio["url"] = "https://user:password@example.com/video"
+    elif damage == "selected": studio["selected_hook"] = "missing"
+    elif damage == "range": studio["hooks"][0]["end"] = float("inf")
+    elif damage == "style": studio["subtitle"] = "unknown"
+    elif damage == "edits": studio["hooks"][0]["caption_edits"][0]["start"] = 2
+    elif damage == "cues": studio["hooks"][0]["cues"] *= 201
+    elif damage == "duplicate": studio["hooks"] *= 2
+    response = client.post("/api/projects", content=json.dumps(project_payload), headers={"Content-Type": "application/json"})
+    assert response.status_code == 400
+    assert client.get("/api/projects").json()["projects"] == []
+
+
+def test_failed_project_save_and_corrupt_read_keep_disk_data(project_payload, monkeypatch):
+    project = client.post("/api/projects", json=project_payload).json()
+    directory = server._job_manager().directory.parent / "web_projects"
+    path = directory / (project["id"] + ".json")
+    original = path.read_bytes()
+    project_payload.update(revision=1, name="New name")
+    monkeypatch.setattr(server.projects, "atomic_json", Mock(side_effect=OSError("Disk full")))
+    assert client.put("/api/projects/" + project["id"], json=project_payload).status_code == 503
+    assert path.read_bytes() == original
+    path.write_text("broken", encoding="utf-8")
+    result = client.get("/api/projects").json()
+    assert result == {"projects": [], "unreadable_count": 1}
+    assert client.get("/api/projects/" + project["id"]).status_code == 400
+    assert path.read_text() == "broken"
+
+
+def test_project_api_rejects_unauthenticated_access_and_path_traversal(project_payload):
+    fresh = TestClient(app)
+    assert fresh.get("/api/projects").status_code == 401
+    assert fresh.post("/api/projects", json=project_payload).status_code == 401
+    assert client.get("/api/projects/not-a-project-id").status_code == 400
+    assert client.get("/api/projects/" + "a" * 32).status_code == 404
+
+
+def test_concurrent_project_updates_allow_only_one_writer(project_payload):
+    from concurrent.futures import ThreadPoolExecutor
+    from hooky.web import projects
+    directory = server._job_manager().directory.parent / "web_projects"
+    project = projects.save_project(directory, project_payload)
+    project_payload["revision"] = 1
+    def save():
+        try:
+            return projects.save_project(directory, project_payload, project["id"])["revision"]
+        except projects.ProjectConflict:
+            return "conflict"
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: save(), range(2)))
+    assert sorted(map(str, results)) == ["2", "conflict"]

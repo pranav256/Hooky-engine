@@ -31,6 +31,7 @@ from hooky.desktop import open_path
 from hooky.core.subtitles import STYLES
 from hooky.core.utils import validate_video_url
 from hooky.core.source_text import validate_caption_edits
+from hooky.web import projects
 
 def _load_or_create_web_token() -> str:
     env_token = os.environ.get("HOOKY_WEB_TOKEN", "").strip()
@@ -564,6 +565,39 @@ async def launch_make_job(request: Request):
         raise HTTPException(status_code=400, detail="Target must be a valid URL, @channel, or local file.")
     style, framing = _render_options(data)
     return await _launch("make", {"target": target, "style": style, "framing": framing})
+
+
+async def _project_operation(operation, *args):
+    try:
+        return await asyncio.to_thread(operation, _job_manager().directory.parent / "web_projects", *args)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Project not found. Your current edits were kept.") from None
+    except projects.ProjectConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except (ValueError, OverflowError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    except OSError:
+        raise HTTPException(status_code=503, detail="Could not read or save projects. Check disk access and try again; your current edits were kept.") from None
+
+
+@app.get("/api/projects")
+async def get_projects():
+    return await _project_operation(projects.list_projects)
+
+
+@app.get("/api/projects/{project_id}")
+async def get_project(project_id: str):
+    return await _project_operation(projects.read_project, project_id)
+
+
+@app.post("/api/projects")
+async def create_project(request: Request):
+    return await _project_operation(projects.save_project, await _request_object(request))
+
+
+@app.put("/api/projects/{project_id}")
+async def update_project(project_id: str, request: Request):
+    return await _project_operation(projects.save_project, await _request_object(request), project_id)
 
 
 @app.get("/api/jobs")
