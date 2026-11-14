@@ -1430,3 +1430,44 @@ button[hidden],
   margin-left: 0;
 }
 /* Source icon occupies the extra left inset; sidebar metadata aligns to the trailing edge and footer anchors to the bottom. */
+
+.topic-field {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+.topic-field label, .caption-search-row label { color: var(--hooky-text); }
+.topic-field label span { color: var(--hooky-secondary); }
+.topic-field input, .caption-search-row input, .caption-phrase textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 2.75rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--hooky-bg);
+  color: var(--hooky-text);
+  border: 0.0625rem solid var(--hooky-line);
+  border-radius: var(--hooky-radius);
+}
+.topic-field input::placeholder, .caption-search-row input::placeholder { color: var(--hooky-secondary); }
+.topic-field p, .topic-summary, #caption-editor-help, #caption-edit-status {
+  margin: 0;
+  color: var(--hooky-secondary);
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+.caption-editor-heading { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; }
+#caption-editor { padding: 0.75rem; }
+.caption-search-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.5rem; align-items: center; }
+.caption-search-row label { grid-column: 1 / -1; font-size: 0.75rem; }
+.caption-search-row button {
+  padding: 0.5rem 0.75rem;
+  border: 0.0625rem solid var(--hooky-line);
+  border-radius: var(--hooky-radius);
+  background: var(--hooky-raised);
+  color: var(--hooky-text);
+}
+.caption-phrases { display: grid; gap: 0.75rem; max-height: 20rem; overflow-y: auto; padding: 0.5rem; }
+.caption-phrase { display: grid; gap: 0.25rem; min-width: 0; }
+.caption-phrase label { color: var(--hooky-secondary); font-size: 0.75rem; }
+.caption-phrase textarea { display: block; resize: vertical; line-height: 1.5; }
+.caption-phrase textarea[aria-invalid="true"] { border-color: var(--danger); }

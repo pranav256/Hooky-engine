@@ -22,6 +22,7 @@ def isolated_studio(tmp_path, monkeypatch):
     }.items():
         monkeypatch.setattr(server, name, path)
     monkeypatch.setattr(server.os, "environ", server.os.environ.copy())
+    monkeypatch.setattr(server, "DOTENV_KEYS", set())
     async def fake_start(manager, kind, payload, environment, project_root):
         from uuid import uuid4
         job_id = f"{kind}_{uuid4().hex}"
@@ -34,7 +35,7 @@ def isolated_studio(tmp_path, monkeypatch):
     monkeypatch.setattr(server.JobManager, "start", fake_start)
     monkeypatch.setattr(server, "_MANAGER", None)
     monkeypatch.setattr(server, "_STABLE_SETTINGS", {key: "" for key in server._STABLE_SETTINGS})
-    for key in ("OUTPUT_DIR", "CHANNELS_FILE", "LINKS_FILE", "STATE_DIR"):
+    for key in ("OUTPUT_DIR", "CHANNELS_FILE", "LINKS_FILE", "STATE_DIR", "IG_SESSION_FILE"):
         server.os.environ.pop(key, None)
     server._JOBS.clear()
     yield
@@ -56,6 +57,30 @@ def test_index_endpoint():
     assert 'id="frame-mode-center"' in response.text
     assert 'id="tab-settings"' in response.text
     assert 'id="env-raw-textarea"' in response.text
+
+
+def test_topic_and_caption_edits_survive_validated_job_requests():
+    source = "https://example.com/video"
+    response = client.post("/api/analyze/start", json={"url": source, "topic": " startup mistakes "})
+    job = server._job_manager().jobs[response.json()["job_id"]]
+    assert job["request"]["topic"] == "startup mistakes"
+    edits = [{"start": 1, "end": 3, "text": "Correct name"}]
+    response = client.post("/api/jobs/render_clip", json={"url": source, "start": 1, "end": 10, "caption_edits": edits})
+    assert server._job_manager().jobs[response.json()["job_id"]]["request"]["caption_edits"] == edits
+
+
+@pytest.mark.parametrize("topic", [None, [], "x" * 501, "null\0byte"])
+def test_invalid_topic_never_launches_a_worker(topic):
+    response = client.post("/api/analyze/start", json={"url": "https://example.com/video", "topic": topic})
+    assert response.status_code == 400
+    assert not server._job_manager().jobs
+
+
+@pytest.mark.parametrize("edits", [None, [{"start": True, "end": 2, "text": "x"}], [{"start": 1, "end": 3, "text": ""}]])
+def test_invalid_caption_edits_never_launch_a_worker(edits):
+    response = client.post("/api/jobs/render_clip", json={"url": "https://example.com/video", "start": 1, "end": 10, "caption_edits": edits})
+    assert response.status_code == 400
+    assert not server._job_manager().jobs
 
 
 def test_index_assets_are_served_locally():

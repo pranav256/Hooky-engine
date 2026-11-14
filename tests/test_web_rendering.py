@@ -28,6 +28,25 @@ def clip_payload():
             "style": "gold", "framing": "fit", "title": "Shared Title", "video_title": "Source"}
 
 
+def test_render_uses_edited_caption_text_without_mutating_shared_cues(tmp_path, monkeypatch, media_boundary):
+    cues = [{"start": 10, "end": 12, "text": "Wrong name"}, {"start": 12, "end": 14, "text": "Preserved phrase"}]
+    words = Mock(wraps=rendering.caption_words)
+    monkeypatch.setattr(rendering, "caption_words", words)
+    payload = {**clip_payload(), "caption_edits": [{"start": 10, "end": 12, "text": "Correct name"}]}
+    asyncio.run(rendering.render_clip(payload, {"id": "edited"}, tmp_path / "cache", cues))
+    assert words.call_args.args[0][0]["text"] == "Correct name"
+    assert words.call_args.args[0][1]["text"] == "Preserved phrase"
+    assert cues[0]["text"] == "Wrong name"
+    assert "CORRECT" in next((tmp_path / "cache").glob("*.ass")).read_text(encoding="utf-8")
+
+
+def test_stale_caption_edits_fail_before_downloading(tmp_path, media_boundary):
+    payload = {**clip_payload(), "caption_edits": [{"start": 999, "end": 1000, "text": "Stale"}]}
+    with pytest.raises(ValueError, match="no longer matches"):
+        asyncio.run(rendering.render_clip(payload, {"id": "stale"}, tmp_path / "cache", []))
+    assert media_boundary[0] == []
+
+
 def test_fractional_offsets_overlap_captions_and_unique_atomic_outputs(tmp_path, monkeypatch, media_boundary):
     commands, encoder = media_boundary
     ass = Mock(return_value="ASS test")

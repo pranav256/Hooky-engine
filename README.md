@@ -125,6 +125,12 @@ Studio starts at most two workers at once. Cancel stops that worker's download/e
 
 Studio keeps the newest 100 terminal jobs and 200 bounded log lines per job. Disposable Studio caches are cleaned after seven days or above 1 GiB, when no worker is using them. Completed exports and CLI manifests/checkpoints stay outside this cleanup.
 
+Studio reuses prepared video details and transcripts across analysis and export jobs for up to 24 hours. Source URL, caption/transcription language, subtitle source, Whisper model/compute mode, and download authentication settings separate cache entries. Empty or damaged entries are recomputed. Metadata and caption requests run together on a cache miss; unchanged worker status no longer triggers repeated history writes. Encoding quality and exact clip boundaries are preserved. See [performance findings and feature priorities](docs/performance-and-features.md).
+
+To find specific spoken content, enter an optional **Clip topic** (for example, `startup mistakes`) and choose **Detect hooks**. Hooky reads the full transcript in bounded chunks, shows the matching source dialogue and reasons, and returns up to four non-overlapping clips. If Gemini is unavailable, it labels word-matching results; no matches produce a clear empty state. Leave the topic blank for the existing general analysis. Topic search applies to Detect hooks, not Run pipeline.
+
+Select a moment to **Edit captions**. Search within its phrases, correct text, or reset to the original. Edits update the caption simulator and the exported subtitles, and are restored with the current Studio session in this browser. Export snapshots its edits when it starts. Original source transcripts stay unchanged. A changed source caption track can invalidate an old edit; analyze again before exporting. This provides current-session editing, not named projects or cross-browser sync.
+
 ### 1. Feed Channels or Links
 
 Add YouTube handles to `channels.txt`:

@@ -110,6 +110,23 @@ def test_invalid_download_never_publishes_final_output(tmp_path, monkeypatch, lo
     assert not list(outputs.rglob("*.mp4")), "Failed media must not be published"
 
 
+def test_real_render_burns_caption_edits(tmp_path, monkeypatch, local_media):
+    from hooky.web import rendering
+    monkeypatch.setattr(rendering, "OUTPUT_DIR", tmp_path / "output")
+    intercept_download(monkeypatch, rendering, local_media)
+    cues = [{"start": 0.5, "end": 2.5, "text": "Original wording"}]
+    payload = {"url": "https://www.youtube.com/watch?v=fixture0001", "start": 0.75, "end": 2.15,
+               "style": "clean", "framing": "center", "title": "Edited clip", "video_title": "Local fixture",
+               "caption_edits": [{"start": 0.5, "end": 2.5, "text": "Corrected caption"}]}
+    cache = tmp_path / "cache"
+    relative = asyncio.run(rendering.render_clip(payload, {"id": "smoke-edits"}, cache, cues))
+    ass = next(cache.glob("*.ass")).read_text(encoding="utf-8")
+    assert "Corrected" in ass and "Original" not in ass
+    assert cues[0]["text"] == "Original wording"
+    output = rendering.OUTPUT_DIR / relative
+    assert output.exists() and output.stat().st_size > 1000
+
+
 def test_cancelled_render_never_publishes_staged_output(tmp_path, monkeypatch, local_media):
     from hooky.web import rendering
 

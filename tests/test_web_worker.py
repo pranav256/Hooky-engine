@@ -10,6 +10,28 @@ from hooky import config
 from hooky.web import worker
 
 
+def test_worker_only_publishes_changed_progress_and_final_state(tmp_path, monkeypatch, capsys):
+    from hooky.web import analyzer
+    monkeypatch.setattr(config, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(worker.os, "environ", os.environ.copy())
+
+    async def delayed_analysis(url, job):
+        await asyncio.sleep(0.45)
+        job["progress"] = 40
+        await asyncio.sleep(0.45)
+        job["status"] = "completed"
+        return {"hooks": []}
+
+    monkeypatch.setattr(analyzer, "run_analysis_pipeline", delayed_analysis)
+    job = {"id": "progress_fixture", "type": "analyze", "status": "running", "progress": 5}
+    assert asyncio.run(worker.run({"job": job, "payload": {"url": "https://example.com/video"}})) == 0
+    events = [json.loads(line.removeprefix(worker.EVENT_PREFIX))
+              for line in capsys.readouterr().out.splitlines() if line.startswith(worker.EVENT_PREFIX)]
+    assert [event["progress"] for event in events] == [5, 40, 100]
+    assert events[-1]["status"] == "completed"
+    assert events[-1]["result"] == {"hooks": []}
+
+
 @pytest.mark.parametrize("outcome", ["success", "ai_fallback", "source_failure"])
 def test_analysis_worker_publishes_job_progress_and_result(tmp_path, monkeypatch, capsys, outcome):
     from hooky.web import analyzer

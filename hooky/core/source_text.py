@@ -128,6 +128,36 @@ def caption_words(captions: list[dict]) -> list[dict]:
     return words
 
 
+def validate_caption_edits(value: object) -> list[dict]:
+    """Bound editor input before storing it in a worker request."""
+    if not isinstance(value, list) or len(value) > 200:
+        raise ValueError("Caption edits must be a list of at most 200 phrases.")
+    edits, seen = [], set()
+    for edit in value:
+        if not isinstance(edit, dict):
+            raise ValueError("Each caption edit needs start, end and text.")
+        start, end, text = edit.get("start"), edit.get("end"), edit.get("text")
+        if (type(start) not in {int, float} or type(end) not in {int, float}
+                or not math.isfinite(start) or not math.isfinite(end) or not 0 <= start < end
+                or not isinstance(text, str) or not text.strip() or len(text) > 1000 or "\0" in text):
+            raise ValueError("Caption edits need valid times and 1–1000 characters of text.")
+        key = (start, end)
+        if key in seen:
+            raise ValueError("A caption phrase can only be edited once.")
+        seen.add(key)
+        edits.append({"start": start, "end": end, "text": text.strip()})
+    return edits
+
+
+def apply_caption_edits(captions: list[dict], edits: list[dict]) -> list[dict]:
+    replacements = {(edit["start"], edit["end"]): edit["text"]
+                    for edit in validate_caption_edits(edits)}
+    if not replacements.keys() <= {(cue["start"], cue["end"]) for cue in captions}:
+        raise ValueError("A caption edit no longer matches this source. Analyze it again before exporting.")
+    return [{**cue, "text": replacements.get((cue["start"], cue["end"]), cue["text"])}
+            for cue in captions]
+
+
 def _language_patterns() -> list[str]:
     raw = os.environ.get("SOURCE_SUB_LANGS", "en,en-US,en-GB").strip()
     return [part.strip() for part in raw.split(",") if part.strip()]

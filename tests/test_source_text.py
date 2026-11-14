@@ -3,6 +3,8 @@ from pathlib import Path
 
 from hooky.core.highlights import _build_prompt
 from hooky.core.source_text import caption_words, parse_caption_file
+from hooky.core.source_text import apply_caption_edits, validate_caption_edits
+import pytest
 
 
 def test_parse_vtt_to_timestamped_text(tmp_path: Path) -> None:
@@ -48,4 +50,24 @@ def test_caption_words_derive_usable_word_timing_from_phrase_cues() -> None:
     assert words[0]["start"] == 10.0
     assert words[-1]["end"] == 12.0
     assert all(word["end"] > word["start"] for word in words)
+
+
+def test_caption_edits_do_not_mutate_source_and_preserve_other_phrases():
+    source = [{"start": 1, "end": 3, "text": "Original name"}, {"start": 3, "end": 5, "text": "Keep this"}]
+    edited = apply_caption_edits(source, [{"start": 1, "end": 3, "text": "Correct name"}])
+    assert source[0]["text"] == "Original name"
+    assert edited[0]["text"] == "Correct name" and edited[1] == source[1]
+    assert caption_words(edited)[0]["word"] == "Correct"
+    with pytest.raises(ValueError, match="no longer matches"):
+        apply_caption_edits(source, [{"start": 2, "end": 3, "text": "Unknown phrase"}])
+
+
+@pytest.mark.parametrize("edits", [None, {}, [None], [{"start": True, "end": 3, "text": "x"}],
+    [{"start": 1, "end": float("inf"), "text": "x"}], [{"start": 3, "end": 1, "text": "x"}],
+    [{"start": 1, "end": 3, "text": " "}], [{"start": 1, "end": 3, "text": "x" * 1001}],
+    [{"start": 1, "end": 3, "text": "x\0"}], [{"start": 1, "end": 3, "text": "x"}] * 2,
+    [{"start": 1, "end": 3, "text": "x"}] * 201])
+def test_caption_editor_rejects_invalid_input(edits):
+    with pytest.raises(ValueError):
+        validate_caption_edits(edits)
 

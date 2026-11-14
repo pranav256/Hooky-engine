@@ -193,6 +193,11 @@
             </div>
           </div>
 
+          <div class="topic-field">
+            <label for="clip-topic">Clip topic <span>(optional)</span></label>
+            <input id="clip-topic" type="text" maxlength="500" placeholder="For example: startup mistakes or practical advice" aria-describedby="topic-help" />
+            <p id="topic-help">Detect hooks searches spoken content with Gemini. Leave blank for general hooks.</p>
+          </div>
           <p id="source-state" role="status" class="source-state"></p>
           <!-- Row 2: Intelligent Auto-Recommendation & Override Controls -->
           <div
@@ -412,6 +417,7 @@
               </span>
             </div>
 
+            <p id="topic-results-summary" class="topic-summary" role="status" hidden></p>
             <!-- Hook Cards Scrollable List -->
             <div id="hooks-container" class="space-y-3">
               <!-- Dynamically populated hook cards -->
@@ -543,13 +549,14 @@
                   Play captions
                 </button>
               </div>
-              <!-- Dialogue Transcript Inspector -->
+              <!-- Caption editor -->
               <div
+                id="caption-editor"
                 class="p-3.5 bg-[var(--hooky-bg)] border border-white/[0.08] rounded-lg space-y-2"
               >
-                <div class="flex items-center justify-between text-xs">
+                <div class="caption-editor-heading">
                   <span class="font-medium text-slate-300 font-mono text-[11px]"
-                    >The opening lines</span
+                    >Edit captions</span
                   >
                   <span
                     id="transcript-time-badge"
@@ -557,9 +564,16 @@
                     >--:-- - --:--</span
                   >
                 </div>
+                <div class="caption-search-row">
+                  <label for="caption-search">Find a caption</label>
+                  <input id="caption-search" type="search" placeholder="Search this clip" oninput="renderCaptionEditor()" />
+                  <button id="caption-reset" type="button" onclick="resetCaptions()" disabled>Reset captions</button>
+                </div>
+                <p id="caption-editor-help">Saved in this browser. Changes apply to previews and exports.</p>
+                <p id="caption-edit-status" role="status" aria-live="polite"></p>
                 <div
                   id="dialogue-lines-box"
-                  class="max-h-24 overflow-y-auto space-y-1 font-mono text-xs text-slate-300 pr-1"
+                  class="caption-phrases"
                 >
                   <!-- Dialogue cues populated here -->
                 </div>

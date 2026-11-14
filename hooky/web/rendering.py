@@ -11,7 +11,7 @@ from pathlib import Path
 from hooky.config import OUTPUT_DIR
 from hooky.core.cutter import cut_clip
 from hooky.core.downloader import _format_string, _pick_height, yt_dlp_auth_args
-from hooky.core.source_text import caption_words
+from hooky.core.source_text import caption_words, apply_caption_edits
 from hooky.core.subtitles import build_ass
 from hooky.core.utils import format_timestamp
 from hooky.web.analyzer import extract_youtube_id, prepare_source, extract_ranked_scenes
@@ -34,6 +34,8 @@ async def render_clip(payload: dict, job: dict, cache: Path, cues: list[dict] | 
         source_title = source_title or metadata.get("title", "Video")
         payload = {**payload, "source_duration": metadata.get("duration")}
     source_title = source_title or "Video"
+    if payload.get("caption_edits"):
+        cues = apply_caption_edits(cues, payload["caption_edits"])
     clean_name = re.sub(r"[^\w-]", "_", title.lower())[:32].strip("_") or "clip"
     identity = hashlib.sha256(f"{url}:{start}:{end}".encode()).hexdigest()[:16]
     downloaded_start = math.floor(start)

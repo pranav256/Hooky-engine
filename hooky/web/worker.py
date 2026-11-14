@@ -17,15 +17,19 @@ async def run(request: dict) -> int:
     os.environ["HOOKY_WEB_CACHE_DIR"] = str(cache)
 
     async def publish():
+        previous = None
         while True:
-            print(EVENT_PREFIX + json.dumps({key: value for key, value in job.items() if key not in {"logs", "request", "output_root"}}, ensure_ascii=False, allow_nan=False), flush=True)
+            event = json.dumps({key: value for key, value in job.items() if key not in {"logs", "request", "output_root"}}, ensure_ascii=False, allow_nan=False)
+            if event != previous:
+                print(EVENT_PREFIX + event, flush=True)
+                previous = event
             await asyncio.sleep(0.2)
 
     publisher = asyncio.create_task(publish())
     try:
         if job["type"] == "analyze":
             from hooky.web.analyzer import run_analysis_pipeline
-            job["result"] = await run_analysis_pipeline(payload["url"], job)
+            job["result"] = await run_analysis_pipeline(payload["url"], job, **({"topic": payload["topic"]} if payload.get("topic") else {}))
         elif job["type"] == "render_clip":
             from hooky.web.rendering import render_clip
             output = await render_clip(payload, job, cache)

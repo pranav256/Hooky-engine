@@ -72,6 +72,7 @@ window.fetch = function (input, init) {
 // State management (starts clean with no preloaded video or fake hooks)
 let CURRENT_HOOKS = [];
 let currentSourceVideoTitle = "";
+let currentAnalysisTopic = "", analysisNotice = "";
 let selectedHookId = null;
 let activeFramingMode = "auto";
 let activeSubtitleMode = "auto";
@@ -166,12 +167,15 @@ function persistStudio() {
     id: hook.id,
     start: hook.start,
     end: hook.end,
+    caption_edits: hook.caption_edits || [],
   }));
+  if (CURRENT_HOOKS.length) window._restoredTiming = edits;
   try {
     localStorage.setItem(
       "hooky_studio_v1",
       JSON.stringify({
         source: sourceSafe,
+        topic: document.getElementById("clip-topic").value,
         selectedAnalysisId,
         edits,
         selected: selectedHookId,
@@ -182,8 +186,10 @@ function persistStudio() {
         onboardingDismissed,
       }),
     );
+    return true;
   } catch {
     /* Storage and URL cleanup are optional; retain the in-memory session. */
+    return false;
   }
 }
 function restoreStudio() {
@@ -192,6 +198,7 @@ function restoreStudio() {
     if (!saved) return;
     document.getElementById("source-url").value =
       typeof saved.source === "string" ? saved.source : "";
+    document.getElementById("clip-topic").value = typeof saved.topic === "string" ? saved.topic.slice(0, 500) : "";
     selectedAnalysisId = saved.selectedAnalysisId || null;
     selectedHookId = saved.selected;
     activeJobId = saved.activeJobId || null;
@@ -273,6 +280,10 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("source-url").addEventListener("input", () => {
     persistStudio();
     updateJobControls();
+  });
+  document.getElementById("clip-topic").addEventListener("input", persistStudio);
+  document.getElementById("clip-topic").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") triggerAnalyze();
   });
   document
     .querySelectorAll(
@@ -509,6 +520,7 @@ function updateSelectedHookDetails() {
     if (previewElem)
       previewElem.innerHTML =
         '<span class="text-slate-500">Subtitle preview will appear here</span>';
+    renderCaptionEditor();
     return;
   }
 
@@ -517,20 +529,67 @@ function updateSelectedHookDetails() {
   if (timeBadge) {
     timeBadge.innerText = `${hook.start_fmt} - ${hook.end_fmt} (${hook.duration})`;
   }
-  if (dialogueBox && hook.dialogue) {
-    dialogueBox.innerHTML = hook.dialogue
-      .map(
-        (d) => `
-          <div class="flex items-start gap-2 hover:bg-white/[0.04] p-1 rounded transition-colors">
-            <span class="text-[var(--hooky-accent)] select-none text-[10px] w-10 shrink-0 font-medium tabular">${escapeHtml(d.time)}</span>
-            <span class="leading-relaxed text-slate-200">${escapeHtml(d.text)}</span>
-          </div>
-        `,
-      )
-      .join("");
-  }
-
+  renderCaptionEditor();
   renderSubtitles();
+}
+
+function captionText(hook, cue) {
+  return hook.caption_edits?.find((edit) => edit.start === cue.start && edit.end === cue.end)?.text ?? cue.text;
+}
+function renderCaptionEditor() {
+  const hook = CURRENT_HOOKS.find((h) => String(h.id) === String(selectedHookId)),
+    box = document.getElementById("dialogue-lines-box"),
+    status = document.getElementById("caption-edit-status"),
+    search = document.getElementById("caption-search"),
+    reset = document.getElementById("caption-reset");
+  const cues = Array.isArray(hook?.cues) ? hook.cues : [];
+  search.disabled = !cues.length;
+  reset.disabled = !hook?.caption_edits?.length;
+  if (!cues.length) {
+    box.innerHTML = hook?.dialogue?.map((line) => `<p>${escapeHtml(line.time)} · ${escapeHtml(line.text)}</p>`).join("") || "Select a moment to edit its captions.";
+    status.textContent = hook ? "Analyze this source again to enable caption editing." : "";
+    return;
+  }
+  const query = search.value.trim().toLowerCase(),
+    visible = cues.map((cue, index) => ({ cue, index })).filter(({ cue }) =>
+      cue.end > hook.start && cue.start < hook.end && captionText(hook, cue).toLowerCase().includes(query)),
+    total = cues.filter((cue) => cue.end > hook.start && cue.start < hook.end).length;
+  box.innerHTML = visible.map(({ cue, index }) => `
+    <div class="caption-phrase">
+      <label for="caption-${index}">Caption at ${escapeHtml(formatSecondsToMMSS(cue.start))} (${cue.start.toFixed(3)}s)</label>
+      <textarea id="caption-${index}" rows="2" maxlength="1000" aria-invalid="${!captionText(hook, cue).trim()}" aria-describedby="caption-edit-status" oninput="editCaption(${index}, this)">${escapeHtml(captionText(hook, cue))}</textarea>
+    </div>`).join("") || "No captions match your search. Clear the search to show this clip's captions.";
+  status.textContent = hook.caption_edits?.some((edit) => !edit.text.trim())
+    ? "Enter caption text before exporting, or reset the captions."
+    : `${visible.length} of ${total} captions shown. ${hook.caption_edits?.length ? "Edits restored." : ""}`;
+}
+function editCaption(index, field) {
+  const hook = CURRENT_HOOKS.find((h) => String(h.id) === String(selectedHookId)), cue = hook?.cues?.[index];
+  if (!cue) return;
+  hook.caption_edits = (hook.caption_edits || []).filter((edit) => edit.start !== cue.start || edit.end !== cue.end);
+  if (field.value !== cue.text) hook.caption_edits.push({ start: cue.start, end: cue.end, text: field.value });
+  field.setAttribute("aria-invalid", String(!field.value.trim()));
+  const saved = persistStudio();
+  document.getElementById("caption-edit-status").textContent = !field.value.trim()
+    ? "Enter caption text before exporting, or reset the captions."
+    : saved ? "Caption changes saved in this browser. Export uses these edits." : "Caption changes kept for this session. Browser storage is unavailable.";
+  document.getElementById("caption-reset").disabled = !hook.caption_edits.length;
+  const alert = document.getElementById("studio-alert");
+  if (field.value.trim() && alert.textContent.startsWith("Correct empty or oversized caption")) alert.classList.add("hidden");
+  wordIdx = 0;
+  renderSubtitles();
+}
+function resetCaptions() {
+  const hook = CURRENT_HOOKS.find((h) => String(h.id) === String(selectedHookId));
+  if (!hook) return;
+  hook.caption_edits = [];
+  persistStudio();
+  renderCaptionEditor();
+  renderSubtitles();
+  document.getElementById("caption-edit-status").textContent = "Original captions restored.";
+  const alert = document.getElementById("studio-alert");
+  if (alert.textContent.startsWith("Correct empty or oversized caption")) alert.classList.add("hidden");
+  document.getElementById("caption-search").focus();
 }
 
 function renderSubtitles() {
@@ -547,7 +606,9 @@ function renderSubtitles() {
 
   const style =
     activeSubtitleMode === "auto" ? autoDetectedStyle : activeSubtitleMode;
-  const words =
+  const editedWords = (hook.cues || []).filter((cue) => cue.end > hook.start && cue.start < hook.end)
+    .flatMap((cue) => captionText(hook, cue).trim().split(/\s+/).filter(Boolean));
+  const words = editedWords.length ? editedWords :
     hook.words && hook.words.length > 0
       ? hook.words
       : hook.title
@@ -585,8 +646,15 @@ function renderHooksList() {
 
   document.getElementById("hook-count").innerText =
     `${CURRENT_HOOKS.length} hooks detected`;
+  const summary = document.getElementById("topic-results-summary");
+  summary.hidden = !currentAnalysisTopic;
+  summary.textContent = currentAnalysisTopic ? `Topic: ${currentAnalysisTopic}. ${CURRENT_HOOKS.length} matches. ${analysisNotice}` : "";
 
   if (CURRENT_HOOKS.length === 0) {
+    if (selectedAnalysisId && currentAnalysisTopic) {
+      container.innerHTML = '<div class="brutal-card p-5"><p>No matching spoken moments found.</p><p>Try a broader topic or clear it to detect general hooks.</p></div>';
+      return;
+    }
     container.innerHTML = `
           <div class="studio-empty p-8 border border-white/[0.08] bg-[var(--hooky-panel)] rounded-lg text-center space-y-3">
             <i data-lucide="video" class="w-8 h-8 text-slate-500 mx-auto"></i>
@@ -618,8 +686,8 @@ function renderHooksList() {
                 </span>
               </div>
               <div class="flex items-center gap-1 font-mono text-xs tabular">
-                <span class="text-[var(--hooky-accent)] font-medium">${escapeHtml(h.retention_score)}%</span>
-                <span class="text-slate-500 text-[10px]">Hook score</span>
+                <span class="text-[var(--hooky-accent)] font-medium">${h.retention_score == null ? "Topic match" : escapeHtml(h.retention_score) + "%"}</span>
+                <span class="text-slate-500 text-[10px]">${h.retention_score == null ? "" : "Hook score"}</span>
               </div>
             </div>
 
@@ -630,6 +698,7 @@ function renderHooksList() {
               <p class="text-xs text-slate-400 mt-1 line-clamp-2 font-mono leading-relaxed">
                 "${escapeHtml(h.hook_quote)}"
               </p>
+              ${currentAnalysisTopic ? `<p class="topic-summary">${escapeHtml(h.reason || "")}</p>` : ""}
             </div>
 
             <div class="flex items-center justify-between pt-2 border-t border-white/[0.06] text-[11px] font-mono">
@@ -801,6 +870,9 @@ function updateJobControls() {
     busy || !CURRENT_HOOKS.length || changedSource;
   document.getElementById("source-url").disabled =
     jobStarting || Boolean(activeJobId);
+  document.getElementById("clip-topic").disabled = jobStarting || Boolean(activeJobId);
+  document.querySelectorAll(".caption-phrase textarea").forEach((field) => { field.disabled = busy || changedSource; });
+  document.getElementById("caption-reset").disabled = busy || changedSource || !CURRENT_HOOKS.find((h) => String(h.id) === String(selectedHookId))?.caption_edits?.length;
   document
     .querySelectorAll("[data-export-hook]")
     .forEach((button) => (button.disabled = busy || changedSource));
@@ -886,7 +958,7 @@ function showJob(job) {
     jobLogOffsets.delete(jobLogOffsets.keys().next().value);
   rememberJob(job);
   if (
-    job.result?.hooks?.length &&
+    (job.result?.hooks?.length || (job.type === "analyze" && job.status === "completed" && Array.isArray(job.result?.hooks))) &&
     (selectedAnalysisId !== job.id || !CURRENT_HOOKS.length)
   )
     hydrateAnalysis(job);
@@ -901,11 +973,18 @@ function hydrateAnalysis(job, restoreEdits = false) {
     ? job.result.hooks.slice(0, 100).map((hook) => ({ ...hook }))
     : [];
   currentSourceVideoTitle = job.result?.video_title || "";
+  currentAnalysisTopic = job.result?.topic || job.request?.topic || "";
+  analysisNotice = job.result?.notice || "";
+  document.getElementById("clip-topic").value = currentAnalysisTopic;
   if (restoreEdits)
     (window._restoredTiming || []).forEach((edit) => {
+      if (!edit || typeof edit !== "object") return;
       const hook = CURRENT_HOOKS.find((h) => String(h.id) === String(edit.id));
       if (hook && validTiming(edit.start, edit.end))
-        Object.assign(hook, edit, {
+        Object.assign(hook, { start: edit.start, end: edit.end,
+          caption_edits: Array.isArray(edit.caption_edits) ? edit.caption_edits.slice(0, 200).filter((cue) =>
+            cue && typeof cue === "object" && typeof cue.text === "string" && cue.text.length <= 1000 && !cue.text.includes("\0") &&
+            hook.cues?.some((original) => original.start === cue.start && original.end === cue.end)) : [] }, {
           start_fmt: formatSecondsToMMSS(edit.start),
           end_fmt: formatSecondsToMMSS(edit.end),
           duration: (edit.end - edit.start).toFixed(1) + "s",
@@ -929,7 +1008,7 @@ function hydrateAnalysis(job, restoreEdits = false) {
 async function finishJob(job) {
   job = { ...jobs.find((existing) => existing.id === job.id), ...job };
   if (
-    job.result?.hooks?.length &&
+    (job.result?.hooks?.length || (job.type === "analyze" && job.status === "completed" && Array.isArray(job.result?.hooks))) &&
     (selectedAnalysisId !== job.id || !CURRENT_HOOKS.length)
   )
     hydrateAnalysis(job);
@@ -939,7 +1018,7 @@ async function finishJob(job) {
     alert.replaceChildren(
       document.createTextNode(
         job.type === "analyze"
-          ? "Hooks ready. Select a moment to export."
+          ? job.result?.topic && !job.result.hooks?.length ? "No topic matches. Try a broader topic or clear it to detect general hooks." : "Hooks ready. Select a moment to export."
           : "Export complete. Your clips are saved.",
       ),
     );
@@ -1136,6 +1215,9 @@ async function startJob(type, endpoint, payload) {
       CURRENT_HOOKS = [];
       selectedHookId = selectedAnalysisId = null;
       currentSourceVideoTitle = "";
+      currentAnalysisTopic = payload.topic || "";
+      analysisNotice = "";
+      document.getElementById("caption-search").value = "";
       renderHooksList();
       updateSelectedHookDetails();
     }
@@ -1166,7 +1248,8 @@ async function triggerAnalyze() {
   const url = document.getElementById("source-url").value.trim();
   if (!url) return appendConsoleLog("[error] Paste a source video URL first.");
   persistStudio();
-  await startJob("analyze", "/api/analyze/start", { url });
+  const topic = document.getElementById("clip-topic").value.trim();
+  await startJob("analyze", "/api/analyze/start", { url, ...(topic ? { topic } : {}) });
 }
 async function renderSelectedHook() {
   const hook =
@@ -1193,6 +1276,12 @@ async function renderSingleHookById(hookId) {
     return appendConsoleLog(
       "[error] Correct clip start and end before exporting.",
     );
+  if (hook.caption_edits?.some((edit) => !edit.text.trim() || edit.text.length > 1000)) {
+    selectHook(hook.id);
+    appendConsoleLog("[error] Correct empty or oversized caption text before exporting, or reset captions.");
+    document.querySelector('#dialogue-lines-box textarea[aria-invalid="true"]')?.focus();
+    return;
+  }
   await startJob("render_clip", "/api/jobs/render_clip", {
     url,
     start: Number(hook.start),
@@ -1203,6 +1292,7 @@ async function renderSingleHookById(hookId) {
       activeFramingMode === "auto" ? autoDetectedFraming : activeFramingMode,
     title: hook.title,
     video_title: currentSourceVideoTitle,
+    ...(hook.caption_edits?.length ? { caption_edits: hook.caption_edits } : {}),
   });
 }
 async function triggerMakePipeline() {
@@ -1228,7 +1318,10 @@ async function retryJob(job) {
     );
   document.getElementById("source-url").value = source;
   switchTab("studio");
-  if (job.type === "analyze") return triggerAnalyze();
+  if (job.type === "analyze") {
+    document.getElementById("clip-topic").value = job.topic || "";
+    return triggerAnalyze();
+  }
   if (job.type === "make") return triggerMakePipeline();
   if (!validTiming(Number(job.start), Number(job.end)))
     return appendConsoleLog("[error] Select a moment and export it again.");
@@ -1240,6 +1333,7 @@ async function retryJob(job) {
     video_title: job.video_title || "",
     framing: job.framing || "fit",
     style: job.style || "gold",
+    ...(job.caption_edits ? { caption_edits: job.caption_edits } : {}),
   });
 }
 window.addEventListener("pagehide", () => {

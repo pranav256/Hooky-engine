@@ -30,6 +30,7 @@ from hooky.doctor import dependency_checks
 from hooky.desktop import open_path
 from hooky.core.subtitles import STYLES
 from hooky.core.utils import validate_video_url
+from hooky.core.source_text import validate_caption_edits
 
 def _load_or_create_web_token() -> str:
     env_token = os.environ.get("HOOKY_WEB_TOKEN", "").strip()
@@ -239,6 +240,16 @@ def _render_options(data: dict[str, Any]) -> tuple[str, str]:
     if framing not in {"center", "fit"}:
         raise HTTPException(status_code=400, detail="Framing must be 'center' or 'fit'.")
     return style, framing
+
+
+def _analysis_payload(data: dict) -> dict:
+    payload = {"url": _video_url(data)}
+    topic = _request_text(data, "topic")
+    if len(topic) > 500:
+        raise HTTPException(status_code=400, detail="Topic must be at most 500 characters.")
+    if topic:
+        payload["topic"] = topic
+    return payload
 
 
 @app.get("/api/doctor")
@@ -493,7 +504,7 @@ async def serve_output_file(filepath: str, job_id: str | None = None):
 @app.post("/api/analyze/start")
 async def start_analyze_job(request: Request):
     data = await _request_object(request)
-    return await _launch("analyze", {"url": _video_url(data)})
+    return await _launch("analyze", _analysis_payload(data))
 
 
 @app.get("/api/analyze/status/{job_id}")
@@ -504,7 +515,7 @@ async def get_analyze_status(job_id: str):
 @app.post("/api/analyze")
 async def analyze_video(request: Request):
     data = await _request_object(request)
-    launched = await _launch("analyze", {"url": _video_url(data)})
+    launched = await _launch("analyze", _analysis_payload(data))
     job_id = launched["job_id"]
     manager = _job_manager()
     task = manager.tasks.get(job_id)
@@ -532,8 +543,14 @@ async def render_single_clip(request: Request):
     style, framing = _render_options(data)
     title = _request_text(data, "title", "Hooky Reel")
     video_title, source_title = _request_text(data, "video_title"), _request_text(data, "source_title")
-    return await _launch("render", {"url": url, "start": start, "end": end, "style": style, "framing": framing,
-                                    "title": title, "video_title": video_title or source_title})
+    payload = {"url": url, "start": start, "end": end, "style": style, "framing": framing,
+               "title": title, "video_title": video_title or source_title}
+    if "caption_edits" in data:
+        try:
+            payload["caption_edits"] = validate_caption_edits(data["caption_edits"])
+        except (ValueError, OverflowError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+    return await _launch("render", payload)
 
 
 @app.post("/api/jobs/make")
