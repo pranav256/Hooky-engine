@@ -21,7 +21,8 @@ def patched(primary="test-primary", fallbacks=("fb1", "fb2")):
     """Isolate gemini module state: fake config, no pacing, no logbook I/O."""
     saved = (g.GEMINI_MODEL, list(g.GEMINI_FALLBACK_MODELS), g.MIN_INTERVAL,
              g.BASE_DELAY, g._fallback_idx, list(g._rotation_log),
-             set(g._dead_models), g._last_call, g._rate_limit_hits, g._logbook)
+             set(g._dead_models), g._last_call, g._rate_limit_hits, g._logbook,
+             g.get_client, g._call_model)
     g.GEMINI_MODEL = primary
     g.GEMINI_FALLBACK_MODELS = list(fallbacks)
     g.MIN_INTERVAL = 0.0
@@ -37,7 +38,7 @@ def patched(primary="test-primary", fallbacks=("fb1", "fb2")):
     finally:
         (g.GEMINI_MODEL, fallback_list, g.MIN_INTERVAL, g.BASE_DELAY,
          idx, rot, dead, g._last_call, g._rate_limit_hits,
-         g._logbook) = saved
+         g._logbook, g.get_client, g._call_model) = saved
         g.GEMINI_FALLBACK_MODELS = fallback_list
         g._fallback_idx = idx
         g._rotation_log = rot

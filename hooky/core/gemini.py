@@ -164,11 +164,11 @@ def check_available() -> None:
     if not _load_genai():
         print("[gemini] google-genai not installed. Run: uv sync --locked --extra all",
               file=sys.stderr)
-        raise SystemExit(1)
+        raise GeminiNotConfigured("google-genai is not installed. Run: uv sync --locked --extra all")
     if not GEMINI_API_KEY:
         print("[gemini] GEMINI_API_KEY not set. Free key: https://aistudio.google.com/apikey",
               file=sys.stderr)
-        raise SystemExit(1)
+        raise GeminiNotConfigured("GEMINI_API_KEY is not set. Add a key in Studio Settings or .env.")
 
 
 def get_client():
@@ -334,7 +334,7 @@ def check_gemini() -> int:
 
     try:
         client = get_client()
-    except SystemExit:
+    except GeminiNotConfigured:
         return 1
 
     visible = set(list_models(client))
