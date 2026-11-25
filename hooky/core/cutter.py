@@ -50,12 +50,15 @@ def _ffmpeg_error(result: subprocess.CompletedProcess[str], action: str,
 
 def cut_clip(video_path: Path, start: float, end: float, out_path: Path,
               ass_path: Path | None = None, framing: str = "center",
-              background_height: int = 0, label: str = "") -> Path:
+              background_height: int = 0, label: str = "", *,
+              crop_x: float = 0.5, crop_y: float = 0.5, draft: bool = False) -> Path:
     """Render ``[start, end]`` from the master as a centered 9:16 Reel."""
     if end <= start:
         raise ValueError("clip end must be greater than clip start")
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    vf = vertical_crop_filter(framing, background_height)
+    vf = vertical_crop_filter(framing, background_height, crop_x, crop_y)
+    if draft:
+        vf += ",scale=360:640"
     if ass_path is not None:
         vf += f",{_subtitles_filter(ass_path)}"
     if label:
@@ -71,7 +74,7 @@ def cut_clip(video_path: Path, start: float, end: float, out_path: Path,
         "-ss", f"{max(0.0, start):.3f}", "-i", str(video_path),
         "-t", f"{end - start:.3f}",
         "-map", "0:v:0", "-vf", vf,
-        *_VIDEO_ARGS,
+        *(_VIDEO_ARGS if not draft else ["-r", "24", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-pix_fmt", "yuv420p", *lowspec_encode_args()]),
         "-movflags", "+faststart",
     ]
     if has_audio(video_path):

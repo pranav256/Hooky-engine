@@ -30,10 +30,26 @@ async def run(request: dict) -> int:
         if job["type"] == "analyze":
             from hooky.web.analyzer import run_analysis_pipeline
             job["result"] = await run_analysis_pipeline(payload["url"], job, **({"topic": payload["topic"]} if payload.get("topic") else {}))
-        elif job["type"] == "render_clip":
+        elif job["type"] == "batch":
+            from hooky.web.rendering import render_batch
+            outputs = await render_batch(payload, job, cache)
+            job.update(status="completed", output_file=outputs[0], output_files=outputs)
+        elif job["type"] in {"render_clip", "draft"}:
             from hooky.web.rendering import render_clip
-            output = await render_clip(payload, job, cache)
-            job.update(status="completed", output_file=output, output_files=[output])
+            render_payload = {**payload}
+            source = payload["url"]
+            if source.startswith("local:"):
+                from hooky.web.sources import local_source
+                from hooky.web.analyzer import prepare_source
+                metadata, cues = await prepare_source(source, cache, job)
+                render_payload["source_duration"] = metadata["duration"]
+            else:
+                cues = None
+            output = await render_clip(render_payload, job, cache, cues)
+            if job["type"] == "draft":
+                job.update(status="completed", result={"draft_url": f"/api/jobs/{job['id']}/draft"})
+            else:
+                job.update(status="completed", output_file=output, output_files=[output])
         elif payload.get("target", "").startswith(("http://", "https://")):
             from hooky.web.rendering import make_url
             outputs = await make_url(payload, job, cache)
@@ -68,7 +84,7 @@ async def run(request: dict) -> int:
                 raise RuntimeError(f"Pipeline exited with code {code}; no new complete reels were produced." if not outputs else f"Pipeline exited with code {code}.")
             job.update(status="completed", output_file=outputs[0], output_files=outputs)
         if job.get("status") == "completed":
-            job.update(progress=100, step="Analysis complete." if job["type"] == "analyze" else "Reels ready in Output Gallery.")
+            job.update(progress=100, step="Analysis complete." if job["type"] == "analyze" else "Draft preview ready." if job["type"] == "draft" else "Reels ready in Output Gallery.")
         return 0 if job.get("status") == "completed" else 1
     except Exception as exc:
         job.update(status="failed", error=str(exc), step="Job failed; review the error and retry.")

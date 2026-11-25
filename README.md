@@ -108,7 +108,7 @@ Hooky includes a built-in visual Web Studio and control portal running locally a
   <img src="docs/images/engine_radar.png" alt="Hooky Channel Radar" width="49.5%">
 </p>
 
-* **AI Hook Candidate Inspector**: Inspect Gemini-detected viral moments with dialogue transcripts, retention scores, and boundary timecodes.
+* **AI Hook Candidate Inspector**: Inspect suggested moments with source dialogue, ordinal recommendations, selection methods, and boundary timecodes. These suggestions are editorial heuristics, not predicted audience retention.
 * **Dual-Mode Visual Simulator**: Switch between the original horizontal video and the 9:16 vertical crop preview.
 * **Framing & Subtitles**: Choose a centered portrait crop or fit the full source on an ambient blurred canvas; analysis suggests a mode from source dialogue/title.
 * **Channel Radar & `.env` Management**: Monitor creator channels in `channels.txt` and fine-tune runtime environment variables directly in your browser.
@@ -121,6 +121,8 @@ After installation, run `./main.sh doctor` (Windows: `.\main.ps1 doctor`). Docto
 
 In Studio, paste a source URL, detect hooks, select a moment, check its start/end and framing, and export. Retrieve the finished file from Output Gallery. Source captions provide subtitle timing; audio transcription is the fallback when a usable track is unavailable. URL make ranks speech scenes locally, while Detect Hooks also asks Gemini for narrative selection.
 
+Studio can also analyze a local video uploaded in the browser (up to 2 GiB); uploads are stored under `STATE_DIR/web_sources`, checked with FFprobe, and removed with **Forget local video** after deleting projects that reference them. This is local disk storage, not a backup. Drag the portrait preview or use the crop controls to reframe each moment. Select multiple moments and choose **Export selected** to render them together; finished clips remain available if another clip fails, and retry targets unfinished clips. **Quick preview** renders a short, low-resolution draft before the full export.
+
 Studio starts at most two workers at once. Cancel stops that worker's download/encoding process tree. Jobs survive page reload in history; after a server restart unfinished jobs are marked interrupted and require an explicit new start. Saved settings apply to new jobs; active jobs keep their starting settings. Studio file values take precedence over the inherited process environment. Removing a file setting restores the inherited value or built-in default. Source/output path changes apply immediately; token and history/session storage changes require a restart. Previously completed jobs retain access to their recorded output directory.
 
 Studio keeps the newest 100 terminal jobs and 200 bounded log lines per job. Disposable Studio caches are cleaned after seven days or above 1 GiB, when no worker is using them. Completed exports and CLI manifests/checkpoints stay outside this cleanup.
@@ -131,7 +133,7 @@ To find specific spoken content, enter an optional **Clip topic** (for example, 
 
 Select a moment to **Edit captions**. Search within its phrases, correct text, or reset to the original. Edits update the caption simulator and the exported subtitles, and are restored with the current Studio session in this browser. Export snapshots its edits when it starts. Original source transcripts stay unchanged. A changed source caption track can invalidate an old edit; analyze again before exporting.
 
-Use **Projects** to keep an analyzed source for later. Enter a name and choose **Save project** to save all its moments, selected clip, timing, caption corrections, topic and framing/subtitle choices. **Save project** updates the opened project and its name; **Save as new** keeps a separate copy. Choose a saved project and **Open project** to reopen its moments without another Gemini analysis. Unsaved changes prompt before opening another project or starting a new analysis. Saves are explicit; browser-session restoration does not automatically update the project on disk.
+Use **Projects** to keep an analyzed source for later. Enter a name and choose **Save project** to save all its moments, selected clip, timing, crop positions, caption corrections, topic and framing/subtitle choices. **Save project** updates the opened project and its name; **Save as new** keeps a separate copy. Choose a saved project and **Open project** to reopen its moments without another Gemini analysis. Delete projects you no longer need so their local source can be forgotten. Unsaved changes prompt before opening another project or starting a new analysis. Saves are explicit; browser-session restoration does not automatically update the project on disk.
 
 Projects are versioned JSON files under `STATE_DIR/web_projects` (by default `.hooky-state/web_projects`). They survive browser changes, restarts and job-history cleanup. Reload Studio to refresh the list after saving from another browser. Stale saves are rejected so another tab's work stays intact; **Save as new** preserves your version. Project files include transcripts and source URLs, but do not copy the source media or provide cloud sync. Export still needs an available source and valid caption timing. Each snapshot is limited to 1 MiB, 100 moments and 200 caption phrases per moment.
 

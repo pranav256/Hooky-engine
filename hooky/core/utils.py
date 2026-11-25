@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 from functools import lru_cache
 from pathlib import Path
@@ -81,7 +82,8 @@ def safe_duration_clamp(start: float, end: float, total: float) -> tuple[float, 
     return start, end
 
 
-def vertical_crop_filter(framing: str = "center", background_height: int = 0) -> str:
+def vertical_crop_filter(framing: str = "center", background_height: int = 0,
+                         crop_x: float = 0.5, crop_y: float = 0.5) -> str:
     """Fit or center-crop a source onto the 1080x1920 Instagram canvas.
 
     ``fit`` is the safe selective smart-framing mode: it preserves the entire
@@ -107,11 +109,16 @@ def vertical_crop_filter(framing: str = "center", background_height: int = 0) ->
             f"[b]scale={CLIP_WIDTH}:{CLIP_HEIGHT}:force_original_aspect_ratio=decrease[fg];"
             "[bg][fg]overlay=(W-w)/2:(H-h)/2"
         )
+    if (type(crop_x) not in {int, float} or type(crop_y) not in {int, float}
+            or not math.isfinite(crop_x) or not math.isfinite(crop_y)
+            or not 0 <= crop_x <= 1 or not 0 <= crop_y <= 1):
+        raise ValueError("Crop positions must be finite numbers between 0 and 1.")
     if framing == "pad":
         return (f"scale={CLIP_WIDTH}:{CLIP_HEIGHT}:force_original_aspect_ratio=decrease,"
                 f"pad={CLIP_WIDTH}:{CLIP_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black")
     return (
         f"scale={CLIP_WIDTH}:{CLIP_HEIGHT}:force_original_aspect_ratio=increase,"
-        f"crop={CLIP_WIDTH}:{CLIP_HEIGHT}"
+        f"crop={CLIP_WIDTH}:{CLIP_HEIGHT}" +
+        (f":(iw-ow)*{crop_x:.6f}:(ih-oh)*{crop_y:.6f}" if (crop_x, crop_y) != (0.5, 0.5) else "")
     )
 

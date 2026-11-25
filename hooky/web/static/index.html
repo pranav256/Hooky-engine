@@ -154,6 +154,7 @@
               <select id="project-list" onchange="updateProjectControls()" aria-describedby="project-status"><option value="">No saved projects yet</option></select>
             </div>
             <button id="project-open" onclick="openProject()">Open project</button>
+            <button id="project-delete" onclick="deleteProject()">Delete project</button>
             <button id="project-refresh" onclick="loadProjects()">Refresh list</button>
           </div>
           <p id="project-status" role="status" aria-live="polite">Loading projects…</p>
@@ -179,6 +180,8 @@
                 class="w-full bg-[var(--hooky-bg)] border border-white/[0.08] rounded-md pl-10 pr-4 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-white/20 font-mono transition-colors"
               />
             </div>
+            <label class="local-source-button">Choose local video<input id="local-video-file" type="file" accept="video/mp4,video/quicktime,video/x-matroska,video/webm,.mp4,.mov,.mkv,.m4v,.webm" /></label>
+            <button id="forget-local-source" type="button" onclick="forgetLocalVideo()" hidden>Forget local video</button>
 
             <!-- Primary Actions -->
             <div
@@ -201,6 +204,7 @@
                 <i data-lucide="video" class="w-3.5 h-3.5"></i>
                 <span>Export clip</span>
               </button>
+              <button id="batch-render-btn" type="button" onclick="renderSelectedClips()" disabled>Export selected (0)</button>
 
               <button
                 id="execute-make-btn"
@@ -494,6 +498,7 @@
                 id="preview-player-container"
                 class="aspect-[16/9] w-full bg-black border border-white/[0.08] rounded-lg relative overflow-hidden flex items-center justify-center"
               >
+                <video id="local-source-preview" class="absolute inset-0 w-full h-full object-contain hidden" controls playsinline preload="metadata" aria-label="Local source video preview"></video>
                 <div id="player-placeholder" class="text-center p-8 space-y-2">
                   <i
                     data-lucide="play-circle"
@@ -525,6 +530,7 @@
                 id="preview-canvas-container"
                 class="hidden aspect-[16/9] w-full bg-[var(--hooky-bg)] border border-white/[0.08] rounded-lg relative overflow-hidden flex items-center justify-center"
               >
+                <video id="local-source-canvas" class="absolute inset-0 w-full h-full object-contain hidden" playsinline muted preload="metadata" aria-label="Local video crop preview"></video>
                 <iframe
                   id="canvas-video-frame"
                   title="Source video in style preview"
@@ -572,6 +578,16 @@
                   Play captions
                 </button>
               </div>
+              <div class="crop-position-controls">
+                <label for="crop-x">Horizontal crop<input id="crop-x" type="range" min="0" max="100" value="50" aria-label="Horizontal crop position" /></label>
+                <label for="crop-y">Vertical crop<input id="crop-y" type="range" min="0" max="100" value="50" aria-label="Vertical crop position" /></label>
+                <button id="crop-reset" type="button" onclick="resetCrop()">Reset crop</button>
+              </div>
+              <div id="draft-preview" class="draft-preview" hidden>
+                <video controls playsinline preload="metadata" aria-label="Rendered low-resolution clip preview"></video>
+                <button type="button" onclick="document.getElementById('draft-preview').hidden=true">Close preview</button>
+              </div>
+              <button id="draft-render-btn" type="button" onclick="renderDraftPreview()" disabled>Render 10-second draft</button>
               <!-- Caption editor -->
               <div
                 id="caption-editor"

@@ -23,6 +23,7 @@ from hooky.core.gemini import generate
 from hooky.core.downloader import yt_dlp_auth_args
 from hooky.core.utils import format_timestamp
 from hooky.web.jobs import append_log
+from hooky.web.sources import local_source, probe_video
 
 
 def parse_timestamp_seconds(val: Any) -> float:
@@ -74,6 +75,7 @@ def get_video_metadata(url: str) -> dict[str, Any]:
                 "duration": float(data.get("duration", 0.0)),
                 "channel": data.get("channel", "Creator"),
                 "id": data.get("id", extract_youtube_id(url)),
+                "width": data.get("width"), "height": data.get("height"),
             }
     except Exception as exc:
         print(f"[analyzer] metadata probe error: {exc}")
@@ -205,7 +207,7 @@ def extract_ranked_scenes(
     """Extract and rank the highest-scoring non-overlapping scenes across the video.
 
     Scenes are returned strictly sorted from best to worst (Rank #1, #2, etc.),
-    each with a retention score, punchy title, dialogue cues, and precise start/end boundaries.
+    each with selection evidence, a title, dialogue cues, and start/end boundaries.
     """
     if not cues:
         return []
@@ -275,7 +277,6 @@ def extract_ranked_scenes(
         words_in_quote = [w for w in re.sub(r"[^\w\s]", "", first_sentence).split() if len(w) > 2]
         title = " ".join(words_in_quote[:5]).title() if words_in_quote else f"Viral Scene #{idx}"
 
-        retention_score = max(70, min(99, 99 - (idx - 1) * 2))
 
         chunk_cues = b.get("chunk", [])
         dialogue = [
@@ -295,7 +296,7 @@ def extract_ranked_scenes(
             "title": title,
             "hook_quote": first_sentence,
             "category": categories[(idx - 1) % len(categories)],
-            "retention_score": retention_score,
+            "selection_method": "Speech and keyword suggestion",
             "dialogue": dialogue,
             "chunk": chunk_cues,
         })
@@ -371,7 +372,7 @@ def build_dynamic_hooks_from_cues(cues: list[dict], video_title: str, video_id: 
             "title": title,
             "hook_quote": first_sentence,
             "category": categories[idx % len(categories)],
-            "retention_score": max(88, min(99, 98 - idx * 2)),
+            "selection_method": "Speech and keyword suggestion",
             "reason": f"High engagement segment featuring discussion around: {', '.join(b.get('keywords', ['dialogue'])[:3])}.",
             "boundary": "Natural speech pause aligned",
             "words": words_list,
@@ -415,6 +416,10 @@ async def prepare_source(url: str, cache_dir: Path, job: dict, log=print) -> tup
                  "languages": os.environ.get("SOURCE_SUB_LANGS", "en,en-US,en-GB"),
                  "language": language, "model": WHISPER_MODEL, "compute": WHISPER_COMPUTE,
                  "auth": digest(yt_dlp_auth_args())}
+    local = local_source(url) if url.startswith("local:") else None
+    if local:
+        stat = local.stat()
+        signature["local_revision"] = [stat.st_size, stat.st_mtime_ns]
     identity = digest(signature)
     prepared = OUTPUT_DIR / "web_cache" / f"prepared_{identity}.json"
     cached = await asyncio.to_thread(_cached_source, prepared, signature)
@@ -430,7 +435,11 @@ async def prepare_source(url: str, cache_dir: Path, job: dict, log=print) -> tup
     log(f"[meta] Probing URL: {url}")
 
     sub_prefix = cache_dir / f"source_{identity}"
-    if subtitle_source != "whisper":
+    if local:
+        meta = json.loads((local.parent / "metadata.json").read_text(encoding="utf-8"))
+        meta.update(await asyncio.to_thread(probe_video, local))
+        vtt_path = None
+    elif subtitle_source != "whisper":
         meta, vtt_path = await asyncio.gather(
             asyncio.to_thread(get_video_metadata, url), download_captions(url, sub_prefix, log))
     else:
@@ -448,10 +457,10 @@ async def prepare_source(url: str, cache_dir: Path, job: dict, log=print) -> tup
     if vtt_path and vtt_path.exists():
         cues = parse_caption_file(vtt_path)
         log(f"[captions] Parsed {len(cues)} timed dialogue cues from {vtt_path.name}")
-    if not cues and subtitle_source != "source":
+    if not cues and (local or subtitle_source != "source"):
         log("[captions] Notice: Video has no YouTube captions track. Initiating fast audio transcription...")
-        audio_path = cache_dir / f"audio_{identity}.m4a"
-        if not (audio_path.exists() and audio_path.stat().st_size > 10000):
+        audio_path = local or cache_dir / f"audio_{identity}.m4a"
+        if not local and not (audio_path.exists() and audio_path.stat().st_size > 10000):
             dl_cmd = [
                 sys.executable, "-m", "yt_dlp", *yt_dlp_auth_args(),
                 "--no-playlist",
@@ -469,7 +478,7 @@ async def prepare_source(url: str, cache_dir: Path, job: dict, log=print) -> tup
             if dl_proc.returncode != 0:
                 raise RuntimeError(f"Audio download failed: {error.decode('utf-8', errors='replace')[-500:]}")
 
-        if audio_path.exists() and audio_path.stat().st_size > 10000:
+        if audio_path.exists() and (local or audio_path.stat().st_size > 10000):
             log(f"[whisper] Transcribing audio with faster-whisper (model: {os.environ.get('WHISPER_MODEL', 'tiny')})...")
             from hooky.core.subtitles import transcribe
             words = await asyncio.to_thread(transcribe, audio_path, language=language)
@@ -547,6 +556,7 @@ async def _topic_hooks(url: str, topic: str, cues: list[dict], title: str,
                 candidates.append({"start": start, "end": end,
                                    "title": str(match.get("title") or "Topic match")[:100],
                                    "reason": str(match.get("reason") or "Matches your requested topic.")[:400],
+                                   "selection_method": "AI transcript search",
                                    "relevance": max(0, min(100, relevance)), "category": "AI topic match"})
         except Exception as exc:
             failed += 1
@@ -566,6 +576,7 @@ async def _topic_hooks(url: str, topic: str, cues: list[dict], title: str,
                 if end - start >= 8:
                     candidates.append({"start": start, "end": end, "title": cue["text"][:70],
                                        "reason": "Source words matched: " + ", ".join(sorted(hits)),
+                                       "selection_method": "Transcript word match",
                                        "relevance": len(hits), "category": "Word match"})
     hooks = []
     for candidate in sorted(candidates, key=lambda c: c["relevance"], reverse=True):
@@ -632,7 +643,7 @@ async def run_analysis_pipeline(url: str, job: dict, topic: str = "") -> dict[st
                        step=f"Found {len(hooks)} topic matches." if hooks else "No matching spoken moments found. Try a broader topic.")
             job["result"] = {"status": "success", "video_title": title, "video_id": video_id,
                              "duration_fmt": format_timestamp(duration), "recommended_framing": auto_framing,
-                             "recommended_style": auto_style, "framing_reason": framing_reason,
+                             "recommended_style": auto_style, "source_width": meta.get("width"), "source_height": meta.get("height"), "framing_reason": framing_reason,
                              "style_reason": style_reason, "topic": topic, "selection_mode": mode,
                              "notice": notice, "hooks": hooks}
             return job["result"]
@@ -691,8 +702,7 @@ For EACH moment, return valid JSON array:
     "title": "Punchy Title (3-5 words)",
     "hook_quote": "Exact first sentence spoken",
     "category": "Key Moment",
-    "retention_score": 98,
-    "reason": "Why this hooks short-form viewers",
+    "reason": "Why this moment may be a useful starting point",
     "words": ["WORD1", "WORD2", "WORD3", "WORD4", "WORD5"]
   }}
 ]
@@ -762,14 +772,14 @@ For EACH moment, return valid JSON array:
                         "title": h.get("title", f"Moment #{idx + 1}"),
                         "hook_quote": h.get("hook_quote", h.get("title", "")),
                         "category": h.get("category", "Key Moment"),
-                        "retention_score": int(h.get("retention_score", 95 - idx * 2)),
+                        "selection_method": "AI suggestion",
                         "reason": h.get("reason", "High-retention narrative moment."),
                         "boundary": "Natural speech pause aligned",
                         "words": words_list,
                         "dialogue": dialogue_lines,
                         "youtube_embed_url": f"https://www.youtube-nocookie.com/embed/{video_id}?start={int(s)}&end={int(e)}&autoplay=1&enablejsapi=1",
                     })
-                    log(f"[cutter] Hook #{idx + 1}: [{format_timestamp(s)} - {format_timestamp(e)}] '{h.get('title')}' (Score: {h.get('retention_score')})")
+                    log(f"[cutter] Hook #{idx + 1}: [{format_timestamp(s)} - {format_timestamp(e)}] '{h.get('title')}'")
 
         except Exception as gemini_err:
             log(f"[gemini] Notice: AI model fallback engaged ({gemini_err})")
@@ -779,15 +789,17 @@ For EACH moment, return valid JSON array:
             log("[algorithm] Deriving hooks dynamically from video speech density...")
             formatted_hooks = build_dynamic_hooks_from_cues(cues, title, video_id, duration)
             for idx, h in enumerate(formatted_hooks):
-                log(f"[algorithm] Hook #{idx + 1}: [{h['start_fmt']} - {h['end_fmt']}] '{h['title']}' (Score: {h['retention_score']})")
+                log(f"[algorithm] Hook #{idx + 1}: [{h['start_fmt']} - {h['end_fmt']}] '{h['title']}'")
 
         if not formatted_hooks:
             raise RuntimeError("No usable speech or video hooks were found.")
 
         for hook in formatted_hooks:
+            hook.pop("retention_score", None)
+            hook.setdefault("selection_method", "Speech and keyword suggestion")
             hook["cues"] = _caption_cues(cues, hook["start"], hook["end"])
 
-        job["step"] = f"Analysis complete! {len(formatted_hooks)} high-retention clips ready for vertical export."
+        job["step"] = f"Analysis complete! {len(formatted_hooks)} suggested clips are ready for vertical export."
         job["progress"] = 100
         job["step_number"] = 5
         job["status"] = "completed"
@@ -796,6 +808,7 @@ For EACH moment, return valid JSON array:
             "video_title": title,
             "video_id": video_id,
             "duration_fmt": format_timestamp(duration),
+            "source_width": meta.get("width"), "source_height": meta.get("height"),
             "recommended_framing": auto_framing,
             "recommended_style": auto_style,
             "framing_reason": framing_reason,

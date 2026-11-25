@@ -10,10 +10,13 @@ import asyncio
 import math
 import tempfile
 import zipfile
+import shutil
+import subprocess
+from uuid import uuid4
 from pathlib import Path
 from typing import Any
 from contextlib import asynccontextmanager
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
@@ -32,6 +35,8 @@ from hooky.core.subtitles import STYLES
 from hooky.core.utils import validate_video_url
 from hooky.core.source_text import validate_caption_edits
 from hooky.web import projects
+from hooky.web.sources import LOCAL_SOURCE, MAX_UPLOAD_BYTES, VIDEO_SUFFIXES, local_source, probe_video
+from hooky.web.jobs import atomic_json, _redirected
 
 def _load_or_create_web_token() -> str:
     env_token = os.environ.get("HOOKY_WEB_TOKEN", "").strip()
@@ -175,6 +180,7 @@ async def _launch(kind: str, payload: dict) -> dict:
         # Preserve test/deployment configured paths even when no file override exists.
         for key in ("OUTPUT_DIR", "CHANNELS_FILE", "LINKS_FILE"):
             environment[key] = str(_configured_path(key))
+        environment["HOOKY_LOCAL_SOURCE_DIR"] = str(_job_manager().directory.parent / "web_sources")
         job = await _job_manager().start(kind, payload, environment, PROJECT_ROOT)
     except ValueError as exc:
         raise HTTPException(status_code=429 if "Two jobs" in str(exc) else 400, detail=str(exc)) from exc
@@ -221,6 +227,12 @@ def _write_source_lines(path: Path, lines: list[str]) -> None:
 
 def _video_url(data: dict[str, Any]) -> str:
     url = data.get("url")
+    if isinstance(url, str) and LOCAL_SOURCE.fullmatch(url):
+        try:
+            local_source(url, _job_manager().directory.parent / "web_sources")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        return url
     if not isinstance(url, str) or any(char in url for char in "\r\n\0") or not validate_video_url(url.strip()):
         raise HTTPException(status_code=400, detail="Enter a valid http(s) video URL.")
     return url.strip()
@@ -527,11 +539,78 @@ async def analyze_video(request: Request):
     return safe.get("result") or safe
 
 
-@app.post("/api/jobs/render_clip")
-@app.post("/api/jobs/render")
-@app.post("/api/render")
-async def render_single_clip(request: Request):
-    data = await _request_object(request)
+@app.post("/api/sources")
+async def upload_source(request: Request):
+    filename = Path(unquote(request.headers.get("x-filename", "video.mp4")).replace("\\", "/")).name
+    if Path(filename).suffix.lower() not in VIDEO_SUFFIXES:
+        raise HTTPException(status_code=400, detail="Choose MP4, MOV, MKV, M4V or WebM video.")
+    root = _job_manager().directory.parent / "web_sources"
+    if _redirected(root):
+        raise HTTPException(status_code=400, detail="Source directory must not be redirected.")
+    directory = root / uuid4().hex
+    directory.mkdir(parents=True)
+    path = directory / ("source" + Path(filename).suffix.lower())
+    try:
+        size = 0
+        with path.open("xb") as output:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > MAX_UPLOAD_BYTES:
+                    raise HTTPException(status_code=413, detail="Local videos must be 2 GiB or smaller.")
+                await asyncio.to_thread(output.write, chunk)
+        if not size:
+            raise HTTPException(status_code=400, detail="Choose a non-empty video file.")
+        try:
+            metadata = await asyncio.to_thread(probe_video, path)
+        except (ValueError, KeyError, StopIteration, OSError, subprocess.SubprocessError):
+            raise HTTPException(status_code=400, detail="Could not read this video. Choose a playable video with a duration of at most 24 hours.") from None
+        metadata.update(title=filename[:200], id=directory.name)
+        atomic_json(directory / "metadata.json", metadata)
+    except BaseException:
+        shutil.rmtree(directory)
+        raise
+    return {"url": "local:" + directory.name, **metadata}
+
+
+@app.get("/api/sources/{source_id}/video")
+async def source_video(source_id: str, request: Request):
+    try:
+        path = local_source("local:" + source_id, _job_manager().directory.parent / "web_sources")
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    import mimetypes
+    return FileResponse(path, media_type=mimetypes.guess_type(path.name)[0] or "application/octet-stream",
+                        headers={"Content-Disposition": "inline", "Accept-Ranges": "bytes"})
+
+
+@app.delete("/api/sources/{source_id}")
+async def delete_source(source_id: str):
+    if not re.fullmatch(r"[0-9a-f]{32}", source_id):
+        raise HTTPException(status_code=400, detail="Invalid local video reference.")
+    reference = "local:" + source_id
+    manager = _job_manager()
+    if any(job.get("status") in {"running", "cancelling"} and
+           (job.get("request", {}).get("url") == reference or job.get("request", {}).get("target") == reference)
+           for job in manager.jobs.values()):
+        raise HTTPException(status_code=409, detail="This video is in use by a running job. Wait for it to finish before deleting it.")
+    projects_dir = manager.directory.parent / "web_projects"
+    for snapshot in projects_dir.glob("*.json"):
+        if _redirected(snapshot):
+            continue
+        try:
+            if json.loads(snapshot.read_text(encoding="utf-8")).get("studio", {}).get("url") == reference:
+                raise HTTPException(status_code=409, detail="A saved project uses this video. Delete that project first.")
+        except (OSError, ValueError, AttributeError):
+            continue
+    directory = manager.directory.parent / "web_sources"
+    folder = directory / source_id
+    if _redirected(directory) or _redirected(folder) or not folder.is_dir():
+        raise HTTPException(status_code=404, detail="Local video not found.")
+    shutil.rmtree(folder)
+    return {"status": "deleted"}
+
+
+def _clip_payload(data: dict) -> dict:
     url = _video_url(data)
     try:
         if isinstance(data.get("start"), bool) or isinstance(data.get("end"), bool):
@@ -546,12 +625,54 @@ async def render_single_clip(request: Request):
     video_title, source_title = _request_text(data, "video_title"), _request_text(data, "source_title")
     payload = {"url": url, "start": start, "end": end, "style": style, "framing": framing,
                "title": title, "video_title": video_title or source_title}
+    for key in ("crop_x", "crop_y"):
+        value = data.get(key, 0.5)
+        if type(value) not in {int, float} or not math.isfinite(value) or not 0 <= value <= 1:
+            raise HTTPException(status_code=400, detail="Crop positions must be numbers between 0 and 1.")
+        if key in data:
+            payload[key] = value
     if "caption_edits" in data:
         try:
             payload["caption_edits"] = validate_caption_edits(data["caption_edits"])
         except (ValueError, OverflowError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
-    return await _launch("render", payload)
+    return payload
+
+
+@app.post("/api/jobs/batch")
+async def render_selected_clips(request: Request):
+    data = await _request_object(request)
+    clips = data.get("clips")
+    if not isinstance(clips, list) or not 1 <= len(clips) <= 100 or any(not isinstance(clip, dict) for clip in clips):
+        raise HTTPException(status_code=400, detail="Select 1–100 clips to export.")
+    payloads = [_clip_payload({**data, **clip, "url": data.get("url")}) for clip in clips]
+    return await _launch("batch", {"url": payloads[0]["url"], "clips": payloads, "title": "Selected clips"})
+
+
+@app.post("/api/jobs/draft")
+async def render_draft(request: Request):
+    payload = _clip_payload(await _request_object(request))
+    payload["end"] = min(payload["end"], payload["start"] + 10)
+    payload["draft"] = True
+    return await _launch("draft", payload)
+
+
+@app.get("/api/jobs/{job_id}/draft")
+async def get_draft(job_id: str):
+    job = _job_manager().jobs.get(job_id)
+    if not job or job.get("type") != "draft" or job.get("status") != "completed":
+        raise HTTPException(status_code=404, detail="Draft is not ready.")
+    path = Path(job["output_root"]) / "web_cache" / job["id"] / "draft.mp4"
+    if not path.is_file() or _redirected(path) or _redirected(path.parent):
+        raise HTTPException(status_code=404, detail="Draft expired. Render another preview.")
+    return FileResponse(path, media_type="video/mp4")
+
+
+@app.post("/api/jobs/render_clip")
+@app.post("/api/jobs/render")
+@app.post("/api/render")
+async def render_single_clip(request: Request):
+    return await _launch("render", _clip_payload(await _request_object(request)))
 
 
 @app.post("/api/jobs/make")
@@ -598,6 +719,12 @@ async def create_project(request: Request):
 @app.put("/api/projects/{project_id}")
 async def update_project(project_id: str, request: Request):
     return await _project_operation(projects.save_project, await _request_object(request), project_id)
+
+
+@app.delete("/api/projects/{project_id}")
+async def delete_project(project_id: str):
+    await _project_operation(projects.delete_project, project_id)
+    return {"deleted": True}
 
 
 @app.get("/api/jobs")

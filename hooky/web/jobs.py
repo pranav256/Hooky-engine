@@ -374,7 +374,7 @@ class JobManager:
             if "output_files" in event and (not isinstance(event["output_files"], list) or len(event["output_files"]) > 100 or any(not isinstance(item, str) for item in event["output_files"])):
                 return
             event = self._redact(event, self.secrets.get(job["id"], ()))
-            if event["status"] == "completed" and job["type"] in {"render_clip", "make"}:
+            if event["status"] == "completed" and job["type"] in {"render_clip", "make", "batch"}:
                 root = Path(job["output_root"]).resolve()
                 output = event.get("output_file")
                 path = root / output if output else None

@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from hooky.web import rendering
+from hooky.core.utils import vertical_crop_filter
 
 
 @pytest.fixture
@@ -26,6 +27,18 @@ def media_boundary(tmp_path, monkeypatch):
 def clip_payload():
     return {"url": "https://example.com/video", "start": 10.35, "end": 13.6,
             "style": "gold", "framing": "fit", "title": "Shared Title", "video_title": "Source"}
+
+
+def test_manual_crop_position_is_applied_only_to_crop_framing():
+    center = vertical_crop_filter("center")
+    left = vertical_crop_filter("center", crop_x=0)
+    upper = vertical_crop_filter("center", crop_y=0)
+    assert center.endswith("crop=1080:1920")
+    assert left.endswith("crop=1080:1920:(iw-ow)*0.000000:(ih-oh)*0.500000")
+    assert upper.endswith("crop=1080:1920:(iw-ow)*0.500000:(ih-oh)*0.000000")
+    assert vertical_crop_filter("fit", crop_x=0, crop_y=1).startswith("split[a][b];")
+    with pytest.raises(ValueError):
+        vertical_crop_filter("center", crop_x=float("nan"))
 
 
 def test_render_uses_edited_caption_text_without_mutating_shared_cues(tmp_path, monkeypatch, media_boundary):

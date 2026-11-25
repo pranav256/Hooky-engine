@@ -14,6 +14,7 @@ from hooky.core.source_text import apply_caption_edits, validate_caption_edits
 from hooky.core.subtitles import STYLES
 from hooky.core.utils import format_timestamp, validate_video_url
 from hooky.web.jobs import atomic_json, _redirected
+from hooky.web.sources import LOCAL_SOURCE
 
 _WRITE_LOCK = threading.Lock()
 MAX_PROJECT_BYTES = 1024 * 1024
@@ -46,8 +47,8 @@ def validate_project(data: dict) -> dict:
     if not isinstance(studio, dict):
         raise ValueError("Project must contain a Studio snapshot.")
     url = _text(studio, "url", 4096)
-    if (not validate_video_url(url) or any(char in url for char in "\r\n")
-            or urlsplit(url).username or urlsplit(url).password):
+    if (not LOCAL_SOURCE.fullmatch(url) and (not validate_video_url(url) or any(char in url for char in "\r\n")
+            or urlsplit(url).username or urlsplit(url).password)):
         raise ValueError("Project source must be an http(s) video URL without embedded credentials.")
     options = {"framing": {"auto", "fit", "center"}, "subtitle": {"auto", *STYLES},
                "recommended_framing": {"fit", "center"}, "recommended_style": set(STYLES)}
@@ -80,8 +81,16 @@ def validate_project(data: dict) -> dict:
                 "duration": f"{end - start:.1f}s", "cues": cues, "caption_edits": edits,
                 "dialogue": [{"time": format_timestamp(c["start"]), "text": c["text"]} for c in cues],
                 "words": (cues[0]["text"].split() if cues else [])[:8]}
-        for key, limit in {"title": 100, "category": 100, "hook_quote": 1000, "reason": 400}.items():
+        for key, limit in {"title": 100, "category": 100, "hook_quote": 1000, "reason": 400, "selection_method": 100}.items():
             hook[key] = _text(raw, key, limit)
+        for key in ("crop_x", "crop_y"):
+            value = raw.get(key, 0.5)
+            if type(value) not in {int, float} or not math.isfinite(value) or not 0 <= value <= 1:
+                raise ValueError("Crop positions must be numbers between 0 and 1.")
+            hook[key] = value
+        if type(raw.get("export_selected", False)) is not bool:
+            raise ValueError("Batch selection must be true or false.")
+        hook["export_selected"] = raw.get("export_selected", False)
         if raw.get("retention_score") is not None:
             score = raw["retention_score"]
             if type(score) not in {int, float} or not math.isfinite(score) or not 0 <= score <= 100:
@@ -94,6 +103,12 @@ def validate_project(data: dict) -> dict:
     snapshot = {"url": url, "topic": _text(studio, "topic", 500),
                 "video_title": _text(studio, "video_title", 1000), "hooks": hooks,
                 "selected_hook": selected, **choices, "notice": _text(studio, "notice", 1000)}
+    for key in ("source_width", "source_height"):
+        value = studio.get(key)
+        if value is not None:
+            if type(value) not in {int, float} or not math.isfinite(value) or not 0 < value <= 32768:
+                raise ValueError("Invalid source dimensions.")
+            snapshot[key] = value
     return {"name": name, "studio": snapshot}
 
 
@@ -148,3 +163,12 @@ def save_project(directory: Path, data: dict, project_id: str | None = None) -> 
             raise ValueError("Project exceeds 1 MiB. Shorten caption text or save fewer moments.")
         atomic_json(_path(directory, project_id), project)
         return project
+
+
+def delete_project(directory: Path, project_id: str) -> None:
+    with _WRITE_LOCK:
+        path = _path(directory, project_id)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            raise FileNotFoundError("Project not found.") from None

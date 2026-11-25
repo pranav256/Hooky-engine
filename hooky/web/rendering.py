@@ -15,6 +15,7 @@ from hooky.core.source_text import caption_words, apply_caption_edits
 from hooky.core.subtitles import build_ass
 from hooky.core.utils import format_timestamp
 from hooky.web.analyzer import extract_youtube_id, prepare_source, extract_ranked_scenes
+from hooky.web.sources import local_source
 
 
 def sanitize_folder_name(name: str, fallback: str = "video_reels") -> str:
@@ -33,6 +34,8 @@ async def render_clip(payload: dict, job: dict, cache: Path, cues: list[dict] | 
         metadata, cues = await prepare_source(url, cache, job)
         source_title = source_title or metadata.get("title", "Video")
         payload = {**payload, "source_duration": metadata.get("duration")}
+    if payload.get("source_duration") and end > payload["source_duration"] + 0.05:
+        raise ValueError("Clip end exceeds the source duration. Adjust its timing.")
     source_title = source_title or "Video"
     if payload.get("caption_edits"):
         cues = apply_caption_edits(cues, payload["caption_edits"])
@@ -43,7 +46,11 @@ async def render_clip(payload: dict, job: dict, cache: Path, cues: list[dict] | 
     cache.mkdir(parents=True, exist_ok=True)
     job.update(progress=25, step="Downloading selected footage...")
     print(f"[downloader] Fetching {end - start:.2f}s section from {url}", flush=True)
-    if not (snippet.exists() and snippet.stat().st_size > 1000):
+    is_local = url.startswith("local:")
+    if is_local:
+        snippet = local_source(url)
+        downloaded_start = 0
+    elif not (snippet.exists() and snippet.stat().st_size > 1000):
         process = await asyncio.create_subprocess_exec(
             sys.executable, "-m", "yt_dlp", *yt_dlp_auth_args(), "--download-sections", f"*{downloaded_start}-{end + 1}",
             "--no-playlist", "--force-keyframes-at-cuts", "-f", _format_string(_pick_height(payload.get("source_duration"))),
@@ -60,22 +67,50 @@ async def render_clip(payload: dict, job: dict, cache: Path, cues: list[dict] | 
         words = caption_words(relative)
         if words:
             ass_path = cache / f"subs_{identity}_{style}.ass"
-            ass_path.write_text(build_ass(words, clip_start=0, clip_end=end - start, style_name=style), encoding="utf-8")
+            ass_path.write_text(build_ass(words, clip_start=0, clip_end=end - start, style_name=style,
+                                          **({"width": 360, "height": 640} if payload.get("draft") else {})), encoding="utf-8")
     folder = sanitize_folder_name(source_title)
     output_dir = OUTPUT_DIR / folder
-    output_dir.mkdir(parents=True, exist_ok=True)
+    if not payload.get("draft"):
+        output_dir.mkdir(parents=True, exist_ok=True)
     filename = f"reel_{clean_name}_{job['id']}_{identity}.mp4"
     output = output_dir / filename
-    job.update(progress=75, step="Encoding vertical reel...")
+    job.update(progress=75, step="Encoding draft preview..." if payload.get("draft") else "Encoding vertical reel...")
     print(f"[ffmpeg] Encoding {filename} ({style}, {framing})", flush=True)
-    staged = cache / filename
+    staged = cache / ("draft.mp4" if payload.get("draft") else filename)
     offset = start - downloaded_start
-    await asyncio.to_thread(cut_clip, video_path=snippet, start=offset, end=offset + end - start, out_path=staged, ass_path=ass_path, framing=framing)
+    options = {key: payload[key] for key in ("crop_x", "crop_y", "draft") if key in payload}
+    if payload.get("draft") and framing == "fit":
+        options["background_height"] = 320
+    await asyncio.to_thread(cut_clip, video_path=snippet, start=offset, end=offset + end - start, out_path=staged, ass_path=ass_path, framing=framing, **options)
     if not staged.exists() or staged.stat().st_size <= 1000:
         raise RuntimeError("FFmpeg render failed: no complete output file was created.")
+    if payload.get("draft"):
+        return "draft.mp4"
     staged.replace(output)
-    snippet.unlink(missing_ok=True)
+    if not is_local:
+        snippet.unlink(missing_ok=True)
     return f"{folder}/{filename}"
+
+
+async def render_batch(payload: dict, job: dict, cache: Path) -> list[str]:
+    metadata, cues = await prepare_source(payload["url"], cache, job)
+    outcomes, outputs = [], []
+    job["result"] = {"clips": outcomes}
+    for index, clip in enumerate(payload["clips"]):
+        job.update(step=f"Exporting selected clip {index + 1}/{len(payload['clips'])}...", progress=10)
+        try:
+            output = await render_clip({**clip, "source_duration": metadata.get("duration")}, job, cache / str(index), cues)
+            outputs.append(output)
+            outcomes.append({"index": index, "title": clip["title"], "status": "completed", "output_file": output})
+            job.update(output_files=outputs[:], output_file=outputs[0])
+        except Exception as exc:
+            outcomes.append({"index": index, "title": clip["title"], "status": "failed", "error": str(exc)[:1000]})
+            print(f"[batch] Clip {index + 1} failed: {exc}", flush=True)
+    failed = sum(item["status"] == "failed" for item in outcomes)
+    if failed:
+        raise RuntimeError(f"{failed} clips failed; {len(outputs)} finished clips remain in Output Gallery. Retry exports only unfinished clips.")
+    return outputs
 
 
 async def make_url(payload: dict, job: dict, cache: Path) -> list[str]:

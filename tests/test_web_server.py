@@ -70,6 +70,53 @@ def test_topic_and_caption_edits_survive_validated_job_requests():
     assert server._job_manager().jobs[response.json()["job_id"]]["request"]["caption_edits"] == edits
 
 
+def test_batch_export_validates_every_selected_clip_before_launch():
+    response = client.post("/api/jobs/batch", json={"url": "https://example.com/video", "clips": [
+        {"start": 1, "end": 5, "title": "One"}, {"start": 3, "end": 8, "title": "Two", "crop_x": 0.7},
+    ]})
+    assert response.status_code == 200
+    request = server._job_manager().jobs[response.json()["job_id"]]["request"]
+    assert [clip["title"] for clip in request["clips"]] == ["One", "Two"]
+    assert request["clips"][1]["crop_x"] == 0.7
+    assert client.post("/api/jobs/batch", json={"url": "https://example.com/video", "clips": [
+        {"start": 1, "end": 5}, {"start": 8, "end": 3},
+    ]}).status_code == 400
+    assert client.post("/api/jobs/batch", json={"url": "https://example.com/video", "clips": []}).status_code == 400
+
+
+def test_upload_local_video_keeps_opaque_reference_and_mime(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "probe_video", lambda path: {"duration": 12, "width": 1920, "height": 1080})
+    response = client.post("/api/sources", content=b"fixture", headers={"X-Filename": "meeting.webm"})
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["url"]) == 38 and data["url"].startswith("local:")
+    video = client.get(f"/api/sources/{data['id']}/video")
+    assert video.status_code == 200 and video.content == b"fixture"
+    assert video.headers["content-type"] == "video/webm"
+    assert client.post("/api/analyze/start", json={"url": data["url"]}).status_code == 200
+
+
+def test_local_video_deletion_refuses_running_jobs_and_removes_unreferenced_upload(tmp_path):
+    from uuid import uuid4
+    source_id = uuid4().hex
+    folder = server._job_manager().directory.parent / "web_sources" / source_id
+    folder.mkdir(parents=True)
+    (folder / "source.mp4").write_bytes(b"fixture")
+    server._job_manager().jobs["active"] = {"id": "active", "status": "running", "request": {"url": "local:" + source_id}}
+    assert client.delete(f"/api/sources/{source_id}").status_code == 409
+    server._job_manager().jobs.clear()
+    response = client.delete(f"/api/sources/{source_id}")
+    assert response.status_code == 200 and not folder.exists()
+
+
+def test_deleting_project_removes_saved_snapshot(project_payload):
+    saved = client.post("/api/projects", json=project_payload)
+    assert saved.status_code == 200
+    project_id = saved.json()["id"]
+    assert client.delete(f"/api/projects/{project_id}").json() == {"deleted": True}
+    assert client.get(f"/api/projects/{project_id}").status_code == 404
+
+
 @pytest.mark.parametrize("topic", [None, [], "x" * 501, "null\0byte"])
 def test_invalid_topic_never_launches_a_worker(topic):
     response = client.post("/api/analyze/start", json={"url": "https://example.com/video", "topic": topic})

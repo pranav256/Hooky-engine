@@ -8,10 +8,13 @@ function projectPayload() {
     topic: document.getElementById("clip-topic").value.trim(),
     video_title: currentSourceVideoTitle, hooks: CURRENT_HOOKS.map((hook) => ({
       id: String(hook.id), start: hook.start, end: hook.end, title: hook.title || "", category: hook.category || "",
+      crop_x: hook.crop_x ?? 0.5, crop_y: hook.crop_y ?? 0.5, export_selected: Boolean(hook.export_selected),
       hook_quote: hook.hook_quote || "", reason: hook.reason || "", cues: hook.cues || [], caption_edits: hook.caption_edits || [],
-      ...(hook.retention_score != null ? { retention_score: hook.retention_score } : {}),
+      selection_method: hook.selection_method || "",
     })),
-    selected_hook: String(selectedHookId), framing: activeFramingMode, subtitle: activeSubtitleMode,
+    selected_hook: String(selectedHookId), source_width: Number(document.getElementById("crop-x").dataset.width) || undefined,
+    source_height: Number(document.getElementById("crop-y").dataset.height) || undefined,
+    framing: activeFramingMode, subtitle: activeSubtitleMode,
     recommended_framing: autoDetectedFraming, recommended_style: autoDetectedStyle, notice: analysisNotice,
   } };
 }
@@ -25,6 +28,7 @@ function updateProjectControls() {
   document.getElementById("project-copy").disabled = busy || !canSave || !currentProject;
   document.getElementById("project-copy").hidden = !currentProject;
   document.getElementById("project-open").disabled = busy || projectListFailed || !document.getElementById("project-list").value;
+  document.getElementById("project-delete").disabled = busy || !document.getElementById("project-list").value;
   document.getElementById("project-refresh").disabled = busy;
   document.getElementById("project-refresh").hidden = !projectListFailed && !projectMessage.startsWith("Could not load projects") && !projectMessage.includes("could not be read");
   document.getElementById("project-list").disabled = busy || projectListFailed || !savedProjects.length;
@@ -171,5 +175,26 @@ async function openProject() {
     projectLoading = false;
     updateJobControls();
     document.getElementById("project-name").focus();
+  }
+}
+
+async function deleteProject() {
+  const select = document.getElementById("project-list"), id = select.value;
+  if (!id || projectLoading || jobStarting || activeJobId || jobsLoading) return;
+  const project = savedProjects.find((item) => item.id === id);
+  if (!project || !window.confirm(`Delete saved project “${project.name}”? This cannot be undone.`)) return;
+  projectLoading = true;
+  projectMessage = "";
+  updateJobControls();
+  try {
+    await apiJson("/api/projects/" + encodeURIComponent(id), { method: "DELETE" });
+    savedProjects = savedProjects.filter((item) => item.id !== id);
+    if (currentProject?.id === id) detachProject();
+    renderProjectList();
+  } catch (error) {
+    projectMessage = "Could not delete project. " + error.message;
+  } finally {
+    projectLoading = false;
+    updateJobControls();
   }
 }

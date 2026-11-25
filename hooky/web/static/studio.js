@@ -79,6 +79,7 @@ let activeSubtitleMode = "auto";
 let autoDetectedFraming = "fit";
 let autoDetectedStyle = "gold";
 let currentPreviewMode = "player";
+let cropX = 0.5, cropY = 0.5;
 let cachedChannels = [];
 let savedChannels = "[]";
 let channelsLoaded = false;
@@ -151,6 +152,8 @@ function persistStudio() {
   const source = document.getElementById("source-url").value.trim();
   let sourceSafe = source;
   try {
+    if (/^local:[0-9a-f]{32}$/.test(source)) sourceSafe = source;
+    else {
     const url = new URL(source);
     if (
       url.username ||
@@ -160,6 +163,7 @@ function persistStudio() {
       )
     )
       sourceSafe = "";
+    }
   } catch {
     sourceSafe = "";
   }
@@ -167,6 +171,9 @@ function persistStudio() {
     id: hook.id,
     start: hook.start,
     end: hook.end,
+    crop_x: hook.crop_x ?? 0.5,
+    crop_y: hook.crop_y ?? 0.5,
+    export_selected: Boolean(hook.export_selected),
     caption_edits: hook.caption_edits || [],
   })) : (selectedAnalysisId || currentProject ? window._restoredTiming || [] : []);
   if (CURRENT_HOOKS.length) window._restoredTiming = edits;
@@ -176,6 +183,7 @@ function persistStudio() {
       "hooky_studio_v1",
       JSON.stringify({
         source: sourceSafe,
+        cropX, cropY,
         topic: document.getElementById("clip-topic").value,
         project: currentProject,
         projectName: document.getElementById("project-name").value,
@@ -201,6 +209,8 @@ function restoreStudio() {
     if (!saved) return;
     document.getElementById("source-url").value =
       typeof saved.source === "string" ? saved.source : "";
+    cropX = Number.isFinite(saved.cropX) ? Math.max(0, Math.min(1, saved.cropX)) : 0.5;
+    cropY = Number.isFinite(saved.cropY) ? Math.max(0, Math.min(1, saved.cropY)) : 0.5;
     document.getElementById("clip-topic").value = typeof saved.topic === "string" ? saved.topic.slice(0, 500) : "";
     if (saved.project && /^[0-9a-f]{32}$/.test(saved.project.id) && Number.isInteger(saved.project.revision))
       currentProject = { id: saved.project.id, revision: saved.project.revision, name: String(saved.project.name || "").slice(0, 100) };
@@ -288,6 +298,11 @@ document.addEventListener("DOMContentLoaded", () => {
     updateJobControls();
   });
   document.getElementById("clip-topic").addEventListener("input", persistStudio);
+  document.getElementById("local-video-file").addEventListener("change", uploadLocalVideo);
+  document.getElementById("crop-x").addEventListener("input", (event) => { cropX = Number(event.target.value) / 100; const hook = CURRENT_HOOKS.find((item) => String(item.id) === String(selectedHookId)); if (hook) hook.crop_x = cropX; applyVisualFramingState(); persistStudio(); });
+  document.getElementById("crop-y").addEventListener("input", (event) => { cropY = Number(event.target.value) / 100; const hook = CURRENT_HOOKS.find((item) => String(item.id) === String(selectedHookId)); if (hook) hook.crop_y = cropY; applyVisualFramingState(); persistStudio(); });
+  document.getElementById("crop-x").value = cropX * 100;
+  document.getElementById("crop-y").value = cropY * 100;
   document.getElementById("clip-topic").addEventListener("keydown", (event) => {
     if (event.key === "Enter") triggerAnalyze();
   });
@@ -411,11 +426,25 @@ function applyVisualFramingState() {
   if (effectiveMode === "fit") {
     cropBox.style.width = "40%";
     cropBox.style.left = "30%";
+    cropBox.style.height = "100%";
+    cropBox.style.top = "0";
+    cropBox.style.bottom = "auto";
     tag.innerText = "Canvas fit (ambient blur)";
   } else {
-    cropBox.style.width = "46%";
-    cropBox.style.left = "27%";
-    tag.innerText = "Center crop (solo speaker)";
+    const x = Number(document.getElementById("crop-x").value) / 100, y = Number(document.getElementById("crop-y").value) / 100;
+    const aspect = (Number(document.getElementById("crop-x").dataset.width) || 16) / (Number(document.getElementById("crop-y").dataset.height) || 9);
+    const sourceWidth = aspect >= 16 / 9 ? 100 : aspect / (16 / 9) * 100;
+    const sourceHeight = aspect >= 16 / 9 ? 16 / 9 / aspect * 100 : 100;
+    const cropWidth = aspect > 9 / 16 ? 9 / 16 / aspect * 100 : 100;
+    const cropHeight = aspect < 9 / 16 ? aspect / (9 / 16) * 100 : 100;
+    const width = sourceWidth * cropWidth / 100;
+    const height = sourceHeight * cropHeight / 100;
+    cropBox.style.width = `${width}%`;
+    cropBox.style.height = `${height}%`;
+    cropBox.style.bottom = "auto";
+    cropBox.style.left = `${(100 - sourceWidth) / 2 + (sourceWidth - width) * x}%`;
+    cropBox.style.top = `${(100 - sourceHeight) / 2 + (sourceHeight - height) * y}%`;
+    tag.innerText = `Crop · ${Math.round(x * 100)}% / ${Math.round(y * 100)}%`;
   }
 }
 
@@ -431,6 +460,8 @@ function switchPreviewMode(mode) {
   );
   scheduleCaptionPreview();
   const isPlayer = mode === "player";
+  const localCanvas = document.getElementById("local-source-canvas");
+  localCanvas.classList.toggle("hidden", isPlayer || !localCanvas.src);
   document.getElementById("preview-play-btn").hidden = isPlayer;
   document.getElementById("preview-play-btn").textContent = matchMedia(
     "(prefers-reduced-motion: reduce)",
@@ -478,6 +509,11 @@ function extractYouTubeId(url) {
 
 function selectHook(hookId) {
   selectedHookId = String(hookId);
+  const hook = CURRENT_HOOKS.find((item) => String(item.id) === selectedHookId);
+  cropX = hook?.crop_x ?? 0.5;
+  cropY = hook?.crop_y ?? 0.5;
+  document.getElementById("crop-x").value = cropX * 100;
+  document.getElementById("crop-y").value = cropY * 100;
   wordIdx = 0;
   persistStudio();
   renderHooksList();
@@ -494,6 +530,7 @@ function updateSelectedHookDetails() {
   const dialogueBox = document.getElementById("dialogue-lines-box");
   const previewElem = document.getElementById("canvas-subtitle-preview");
 
+  const localMatch = sourceForHooks.match(/^local:([0-9a-f]{32})$/);
   const videoId = extractYouTubeId(sourceForHooks);
   const embedUrl = videoId
     ? "https://www.youtube-nocookie.com/embed/" +
@@ -507,14 +544,28 @@ function updateSelectedHookDetails() {
     iframe,
     document.getElementById("canvas-video-frame"),
   ]) {
-    if (embedUrl) {
+    if (embedUrl && !localMatch) {
       if (player.getAttribute("src") !== embedUrl) player.src = embedUrl;
     } else player.removeAttribute("src"); // Empty src can reload Studio inside the frame.
     player.classList.toggle("hidden", !embedUrl);
   }
+  const localCanvas = document.getElementById("local-source-canvas");
+  if (localMatch) {
+    const sourceUrl = `/api/sources/${localMatch[1]}/video`;
+    if (localCanvas.src !== new URL(sourceUrl, window.location.href).href) localCanvas.src = sourceUrl;
+    localCanvas.classList.toggle("hidden", currentPreviewMode !== "canvas");
+    if (hook) localCanvas.currentTime = hook.start;
+  } else { localCanvas.pause(); localCanvas.removeAttribute("src"); localCanvas.classList.add("hidden"); }
+  const localVideo = document.getElementById("local-source-preview");
+  if (localMatch) {
+    const sourceUrl = `/api/sources/${localMatch[1]}/video`;
+    if (localVideo.src !== new URL(sourceUrl, window.location.href).href) localVideo.src = sourceUrl;
+    localVideo.classList.remove("hidden");
+    localVideo.currentTime = hook?.start || 0;
+  } else { localVideo.pause(); localVideo.removeAttribute("src"); localVideo.classList.add("hidden"); }
   if (placeholder) {
     placeholder.classList.toggle("hidden", Boolean(embedUrl));
-    placeholder.querySelector("p").textContent = hook
+    placeholder.querySelector("p").textContent = localMatch ? "Local video loaded." : hook
       ? "Source playback is unavailable here. Preview captions in the 9:16 canvas, then export to watch your clip."
       : "Enter a source URL, then detect hooks or run the pipeline.";
   }
@@ -692,8 +743,7 @@ function renderHooksList() {
                 </span>
               </div>
               <div class="flex items-center gap-1 font-mono text-xs tabular">
-                <span class="text-[var(--hooky-accent)] font-medium">${h.retention_score == null ? "Topic match" : escapeHtml(h.retention_score) + "%"}</span>
-                <span class="text-slate-500 text-[10px]">${h.retention_score == null ? "" : "Hook score"}</span>
+                <span class="text-[var(--hooky-accent)] font-medium">Suggested #${idx + 1}</span>
               </div>
             </div>
 
@@ -708,6 +758,7 @@ function renderHooksList() {
             </div>
 
             <div class="flex items-center justify-between pt-2 border-t border-white/[0.06] text-[11px] font-mono">
+              <label class="batch-select-label"><input type="checkbox" data-batch-hook="${escapeHtml(h.id)}" ${h.export_selected ? "checked" : ""} onchange="setBatchSelection(this.dataset.batchHook, this.checked)" aria-label="Select ${escapeHtml(h.title)} for batch export" /> Select for export</label>
               <span class="text-slate-400 tabular">
                 ${escapeHtml(h.start_fmt)} - ${escapeHtml(h.end_fmt)} (${escapeHtml(h.duration)})
               </span>
@@ -730,6 +781,7 @@ function renderHooksList() {
       )
       ?.focus({ preventScroll: true });
   lucide.createIcons();
+  updateBatchButton();
 }
 
 function scheduleCaptionPreview() {
@@ -874,6 +926,9 @@ function updateJobControls() {
   document.getElementById("execute-make-btn").disabled = busy;
   document.getElementById("top-render-btn").disabled =
     busy || !CURRENT_HOOKS.length || changedSource;
+  updateBatchButton();
+  document.getElementById("forget-local-source").hidden = !/^local:[0-9a-f]{32}$/.test(document.getElementById("source-url").value.trim());
+  document.getElementById("forget-local-source").disabled = busy;
   document.getElementById("source-url").disabled =
     jobStarting || Boolean(activeJobId) || projectLoading;
   document.getElementById("clip-topic").disabled = jobStarting || Boolean(activeJobId) || projectLoading;
@@ -994,6 +1049,9 @@ function hydrateAnalysis(job, restoreEdits = false) {
       const hook = CURRENT_HOOKS.find((h) => String(h.id) === String(edit.id));
       if (hook && validTiming(edit.start, edit.end))
         Object.assign(hook, { start: edit.start, end: edit.end,
+          crop_x: Number.isFinite(edit.crop_x) ? Math.max(0, Math.min(1, edit.crop_x)) : 0.5,
+          crop_y: Number.isFinite(edit.crop_y) ? Math.max(0, Math.min(1, edit.crop_y)) : 0.5,
+          export_selected: Boolean(edit.export_selected),
           caption_edits: Array.isArray(edit.caption_edits) ? edit.caption_edits.slice(0, 200).filter((cue) =>
             cue && typeof cue === "object" && typeof cue.text === "string" && cue.text.length <= 1000 && !cue.text.includes("\0") &&
             hook.cues?.some((original) => original.start === cue.start && original.end === cue.end)) : [] }, {
@@ -1006,6 +1064,8 @@ function hydrateAnalysis(job, restoreEdits = false) {
     selectedHookId = CURRENT_HOOKS[0]?.id || null;
   autoDetectedFraming = job.result?.recommended_framing || "fit";
   autoDetectedStyle = job.result?.recommended_style || "gold";
+  document.getElementById("crop-x").dataset.width = job.result?.source_width || "";
+  document.getElementById("crop-y").dataset.height = job.result?.source_height || "";
   document.getElementById("smart-recommendation-text").textContent =
     "Auto-tuned: " +
     (autoDetectedFraming === "fit" ? "Canvas fit" : "Center crop") +
@@ -1025,6 +1085,11 @@ async function finishJob(job) {
   )
     hydrateAnalysis(job);
   if (job.status === "completed") {
+    if (job.type === "draft") {
+      const preview = document.getElementById("draft-preview"), video = preview.querySelector("video");
+      video.src = job.result?.draft_url || `/api/jobs/${encodeURIComponent(job.id)}/draft`;
+      preview.hidden = false;
+    }
     const alert = document.getElementById("studio-alert");
     alert.dataset.state = "success";
     alert.replaceChildren(
@@ -1038,6 +1103,7 @@ async function finishJob(job) {
       const folder = document.createElement("button"),
         clips = document.createElement("button");
       folder.textContent = "Open folder";
+      folder.hidden = job.type === "draft";
       folder.onclick = () => openOutputFolder(job.output_file, job.id, folder);
       clips.textContent = "View clips";
       clips.onclick = () => switchTab("gallery");
@@ -1062,7 +1128,7 @@ async function finishJob(job) {
   updateJobControls();
   renderJobHistory();
   updateOnboarding();
-  if (job.status === "completed" && job.type !== "analyze") await loadOutputs();
+  if (job.output_files?.length || (job.status === "completed" && !["analyze", "draft"].includes(job.type))) await loadOutputs();
 }
 async function loadJobs() {
   if (jobsLoading) return;
@@ -1265,6 +1331,97 @@ async function triggerAnalyze() {
   const topic = document.getElementById("clip-topic").value.trim();
   await startJob("analyze", "/api/analyze/start", { url, ...(topic ? { topic } : {}) });
 }
+function updateBatchButton() {
+  const count = CURRENT_HOOKS.filter((hook) => hook.export_selected).length;
+  const button = document.getElementById("batch-render-btn");
+  button.textContent = `Export selected (${count})`;
+  button.disabled = count < 1 || jobStarting || Boolean(activeJobId) || sourceForHooks !== document.getElementById("source-url").value.trim();
+  document.getElementById("draft-render-btn").disabled = !CURRENT_HOOKS.length || jobStarting || Boolean(activeJobId);
+}
+function setBatchSelection(id, selected) {
+  const hook = CURRENT_HOOKS.find((item) => String(item.id) === String(id));
+  if (hook) hook.export_selected = selected;
+  updateBatchButton();
+  persistStudio();
+}
+function resetCrop() {
+  cropX = cropY = 0.5;
+  document.getElementById("crop-x").value = document.getElementById("crop-y").value = 50;
+  const hook = CURRENT_HOOKS.find((item) => String(item.id) === String(selectedHookId));
+  if (hook) hook.crop_x = hook.crop_y = 0.5;
+  applyVisualFramingState();
+  persistStudio();
+}
+async function uploadLocalVideo(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  if (file.size > 2 * 1024 ** 3) return appendConsoleLog("[error] Local videos must be 2 GiB or smaller.");
+  const input = event.target;
+  input.disabled = true;
+  appendConsoleLog(`[source] Uploading ${file.name}…`);
+  try {
+    const response = await fetch("/api/sources", { method: "POST", headers: { "Content-Type": "application/octet-stream", "X-Filename": encodeURIComponent(file.name) }, body: file, signal: AbortSignal.timeout(1800000) });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.detail || "Video upload failed.");
+    detachProject();
+    CURRENT_HOOKS = [];
+    selectedHookId = selectedAnalysisId = null;
+    sourceForHooks = data.url;
+    currentSourceVideoTitle = data.title;
+    document.getElementById("source-url").value = data.url;
+    document.getElementById("crop-x").dataset.width = data.width;
+    document.getElementById("crop-y").dataset.height = data.height;
+    document.getElementById("project-name").value = data.title;
+    persistStudio();
+    renderHooksList();
+    updateSelectedHookDetails();
+    switchPreviewMode("player");
+    appendConsoleLog(`[source] ${data.title} ready (${Math.round(data.duration)}s).`);
+  } catch (error) { appendConsoleLog("[error] " + error.message + " Your current selection was kept."); }
+  finally { input.disabled = false; input.value = ""; }
+}
+async function forgetLocalVideo() {
+  const source = document.getElementById("source-url").value.trim();
+  if (!/^local:[0-9a-f]{32}$/.test(source) || !window.confirm("Delete this uploaded video from Hooky's local Studio storage? Saved projects that use it must be removed first.")) return;
+  try {
+    await apiJson(`/api/sources/${source.slice(6)}`, { method: "DELETE" });
+    document.getElementById("source-url").value = "";
+    sourceForHooks = "";
+    CURRENT_HOOKS = [];
+    selectedHookId = selectedAnalysisId = null;
+    currentSourceVideoTitle = "";
+    detachProject();
+    persistStudio();
+    renderHooksList();
+    updateSelectedHookDetails();
+    updateJobControls();
+  } catch (error) { appendConsoleLog("[error] " + error.message); }
+}
+function selectedClipPayload(hook) {
+  return { id: hook.id, start: Number(hook.start), end: Number(hook.end), title: hook.title || "Hooky Reel",
+    style: activeSubtitleMode === "auto" ? autoDetectedStyle : activeSubtitleMode,
+    framing: activeFramingMode === "auto" ? autoDetectedFraming : activeFramingMode,
+    crop_x: hook.crop_x ?? cropX, crop_y: hook.crop_y ?? cropY,
+    ...(hook.caption_edits?.length ? { caption_edits: hook.caption_edits } : {}) };
+}
+async function renderSelectedClips() {
+  if (!applyTiming()) return;
+  const clips = CURRENT_HOOKS.filter((hook) => hook.export_selected);
+  if (!clips.length || sourceForHooks !== document.getElementById("source-url").value.trim()) return;
+  const invalid = clips.find((hook) => !validTiming(Number(hook.start), Number(hook.end)) || hook.caption_edits?.some((edit) => !edit.text.trim() || edit.text.length > 1000));
+  if (invalid) { selectHook(invalid.id); return appendConsoleLog("[error] Fix invalid timing or captions on each selected clip before exporting."); }
+  const url = document.getElementById("source-url").value.trim();
+  const shared = selectedClipPayload(clips[0]);
+  await startJob("batch", "/api/jobs/batch", { url, style: shared.style, framing: shared.framing,
+    video_title: currentSourceVideoTitle, clips: clips.map((hook) => selectedClipPayload(hook)) });
+}
+async function renderDraftPreview() {
+  const hook = CURRENT_HOOKS.find((item) => String(item.id) === String(selectedHookId));
+  if (!hook) return;
+  if (!applyTiming()) return;
+  const payload = { url: document.getElementById("source-url").value.trim(), ...selectedClipPayload(hook), video_title: currentSourceVideoTitle };
+  await startJob("draft", "/api/jobs/draft", payload);
+}
 async function renderSelectedHook() {
   const hook =
     CURRENT_HOOKS.find((h) => String(h.id) === String(selectedHookId)) ||
@@ -1304,6 +1461,8 @@ async function renderSingleHookById(hookId) {
       activeSubtitleMode === "auto" ? autoDetectedStyle : activeSubtitleMode,
     framing:
       activeFramingMode === "auto" ? autoDetectedFraming : activeFramingMode,
+    crop_x: hook.crop_x ?? cropX,
+    crop_y: hook.crop_y ?? cropY,
     title: hook.title,
     video_title: currentSourceVideoTitle,
     ...(hook.caption_edits?.length ? { caption_edits: hook.caption_edits } : {}),
@@ -1332,6 +1491,12 @@ async function retryJob(job) {
     );
   document.getElementById("source-url").value = source;
   switchTab("studio");
+  if (job.type === "batch") {
+    const clips = (job.request.clips || []).filter((clip, index) => job.result?.clips?.[index]?.status !== "completed");
+    if (!clips.length) return appendConsoleLog("[job] All selected clips finished; no retry is needed.");
+    return startJob("batch", "/api/jobs/batch", { url: source, video_title: job.request.video_title,
+      style: job.request.style, framing: job.request.framing, clips });
+  }
   if (job.type === "analyze") {
     document.getElementById("clip-topic").value = job.topic || "";
     return triggerAnalyze();
