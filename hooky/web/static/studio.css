@@ -312,14 +312,14 @@ textarea:focus {
   background: var(--hooky-panel);
   border: 0.0625rem solid var(--hooky-line);
   border-radius: var(--hooky-radius);
-  box-shadow: var(--lumen-shadow-sm);
+  box-shadow: var(--ember-shadow-sm);
 }
 .brutal-btn-acid,
 .brutal-btn-export {
   background: var(--hooky-accent);
   color: var(--hooky-deep);
   border-radius: var(--hooky-radius);
-  box-shadow: var(--lumen-shadow-primary);
+  box-shadow: var(--ember-shadow-primary);
   min-height: 2.75rem;
   font-family: var(--hooky-sans);
   font-weight: 550;

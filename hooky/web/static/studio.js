@@ -951,8 +951,10 @@ function renderJobHistory() {
       title = document.createElement("strong"),
       detail = document.createElement("small"),
       status = document.createElement("span");
+    const batchClips = job.type === "batch" && Array.isArray(job.request?.clips) ? job.request.clips : null;
+    const savedClips = Array.isArray(job.result?.clips) ? job.result.clips.filter((clip) => clip.status === "completed").length : 0;
     title.textContent = job.title || job.url || job.target || job.type || "Job";
-    detail.textContent = (job.type || "job") + " · " + job.id;
+    detail.textContent = (job.type || "job") + " · " + job.id + (batchClips ? ` · ${savedClips} of ${batchClips.length} clips saved` : "");
     description.append(title, detail);
     status.textContent =
       job.status +
