@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
@@ -39,6 +40,23 @@ def test_manual_crop_position_is_applied_only_to_crop_framing():
     assert vertical_crop_filter("fit", crop_x=0, crop_y=1).startswith("split[a][b];")
     with pytest.raises(ValueError):
         vertical_crop_filter("center", crop_x=float("nan"))
+
+
+def test_batch_checkpoints_each_clip_outcome_and_keeps_partial_outputs(tmp_path, monkeypatch):
+    monkeypatch.setattr(rendering, "prepare_source", AsyncMock(return_value=({"title": "Source", "duration": 30}, [])))
+    render = AsyncMock(side_effect=["Source/reel_one.mp4", RuntimeError("encode failed")])
+    monkeypatch.setattr(rendering, "render_clip", render)
+    job = {"id": "batch_fixture"}
+    checkpoints = []
+    payload = {"url": "https://example.com/video", "clips": [
+        {"title": "One", "start": 0, "end": 5}, {"title": "Two", "start": 5, "end": 10},
+    ]}
+    with pytest.raises(RuntimeError, match="1 clips failed"):
+        asyncio.run(rendering.render_batch(payload, job, tmp_path / "cache", lambda: checkpoints.append(
+            json.loads(json.dumps({"result": job["result"], "output_files": job.get("output_files", [])})))))
+    assert [item["status"] for item in checkpoints[0]["result"]["clips"]] == ["completed"]
+    assert [item["status"] for item in checkpoints[1]["result"]["clips"]] == ["completed", "failed"]
+    assert checkpoints[1]["output_files"] == ["Source/reel_one.mp4"]
 
 
 def test_render_uses_edited_caption_text_without_mutating_shared_cues(tmp_path, monkeypatch, media_boundary):

@@ -93,7 +93,7 @@ async def render_clip(payload: dict, job: dict, cache: Path, cues: list[dict] | 
     return f"{folder}/{filename}"
 
 
-async def render_batch(payload: dict, job: dict, cache: Path) -> list[str]:
+async def render_batch(payload: dict, job: dict, cache: Path, checkpoint=None) -> list[str]:
     metadata, cues = await prepare_source(payload["url"], cache, job)
     outcomes, outputs = [], []
     job["result"] = {"clips": outcomes}
@@ -107,6 +107,8 @@ async def render_batch(payload: dict, job: dict, cache: Path) -> list[str]:
         except Exception as exc:
             outcomes.append({"index": index, "title": clip["title"], "status": "failed", "error": str(exc)[:1000]})
             print(f"[batch] Clip {index + 1} failed: {exc}", flush=True)
+        if checkpoint:
+            checkpoint()
     failed = sum(item["status"] == "failed" for item in outcomes)
     if failed:
         raise RuntimeError(f"{failed} clips failed; {len(outputs)} finished clips remain in Output Gallery. Retry exports only unfinished clips.")

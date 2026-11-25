@@ -32,6 +32,27 @@ def test_worker_only_publishes_changed_progress_and_final_state(tmp_path, monkey
     assert events[-1]["result"] == {"hooks": []}
 
 
+def test_batch_worker_emits_immediate_clip_checkpoint(tmp_path, monkeypatch, capsys):
+    from hooky.web import rendering
+    monkeypatch.setattr(config, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(worker.os, "environ", os.environ.copy())
+
+    async def batch(payload, job, cache, checkpoint):
+        job["result"] = {"clips": [{"index": 0, "title": "Done", "status": "completed", "output_file": "Source/reel.mp4"}]}
+        job.update(output_file="Source/reel.mp4", output_files=["Source/reel.mp4"])
+        checkpoint()
+        raise RuntimeError("second clip was interrupted")
+
+    monkeypatch.setattr(rendering, "render_batch", batch)
+    job = {"id": "batch_checkpoint", "type": "batch", "status": "running", "progress": 5}
+    assert asyncio.run(worker.run({"job": job, "payload": {"url": "https://example.com/video"}})) == 1
+    events = [json.loads(line.removeprefix(worker.EVENT_PREFIX))
+              for line in capsys.readouterr().out.splitlines() if line.startswith(worker.EVENT_PREFIX)]
+    assert events[0]["result"]["clips"][0]["status"] == "completed"
+    assert events[0]["output_files"] == ["Source/reel.mp4"]
+    assert events[-1]["status"] == "failed"
+
+
 @pytest.mark.parametrize("outcome", ["success", "ai_fallback", "source_failure"])
 def test_analysis_worker_publishes_job_progress_and_result(tmp_path, monkeypatch, capsys, outcome):
     from hooky.web import analyzer

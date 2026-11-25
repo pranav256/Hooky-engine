@@ -248,6 +248,20 @@ def test_history_retention_interruption_and_log_offsets(tmp_path):
     assert job["status"] == "failed"
 
 
+def test_interrupted_batch_keeps_completed_clip_checkpoints(tmp_path):
+    directory = tmp_path / "history"
+    directory.mkdir()
+    job = {"id": "batch_saved", "type": "batch", "status": "running", "progress": 50,
+           "created_at": 1, "logs": [], "output_root": str(tmp_path / "output")}
+    manager = jobs.JobManager(directory)
+    manager._event_or_log(job, b'@@HOOKY_EVENT {"status":"running","progress":50,"result":{"clips":[{"index":0,"status":"completed"}]},"output_files":["Source/reel.mp4"]}')
+    manager._save(job)
+    restored = jobs.JobManager(directory).jobs["batch_saved"]
+    assert restored["status"] == "interrupted"
+    assert restored["result"]["clips"][0]["status"] == "completed"
+    assert restored["output_files"] == ["Source/reel.mp4"]
+
+
 def test_cache_cleanup_keeps_exports_and_refuses_redirected_root(tmp_path):
     cache = tmp_path / "output" / "web_cache"
     cache.mkdir(parents=True)

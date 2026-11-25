@@ -982,7 +982,7 @@ function renderJobHistory() {
       row.append(restore);
     } else if (["failed", "cancelled", "interrupted"].includes(job.status)) {
       const retry = document.createElement("button");
-      retry.textContent = "Retry job";
+      retry.textContent = job.type === "batch" ? "Resume unfinished clips" : "Retry job";
       retry.disabled = Boolean(activeJobId) || jobStarting;
       retry.onclick = () => retryJob(job);
       row.append(retry);

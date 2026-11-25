@@ -9,6 +9,11 @@ import sys
 from hooky.web.jobs import EVENT_PREFIX
 
 
+def emit_event(job: dict) -> None:
+    event = {key: value for key, value in job.items() if key not in {"logs", "request", "output_root"}}
+    print(EVENT_PREFIX + json.dumps(event, ensure_ascii=False, allow_nan=False), flush=True)
+
+
 async def run(request: dict) -> int:
     job, payload = request["job"], request["payload"]
     from hooky.config import OUTPUT_DIR, PROJECT_ROOT
@@ -32,7 +37,7 @@ async def run(request: dict) -> int:
             job["result"] = await run_analysis_pipeline(payload["url"], job, **({"topic": payload["topic"]} if payload.get("topic") else {}))
         elif job["type"] == "batch":
             from hooky.web.rendering import render_batch
-            outputs = await render_batch(payload, job, cache)
+            outputs = await render_batch(payload, job, cache, checkpoint=lambda: emit_event(job))
             job.update(status="completed", output_file=outputs[0], output_files=outputs)
         elif job["type"] in {"render_clip", "draft"}:
             from hooky.web.rendering import render_clip
@@ -93,7 +98,7 @@ async def run(request: dict) -> int:
     finally:
         publisher.cancel()
         await asyncio.gather(publisher, return_exceptions=True)
-        print(EVENT_PREFIX + json.dumps({key: value for key, value in job.items() if key not in {"logs", "request", "output_root"}}, ensure_ascii=False, allow_nan=False), flush=True)
+        emit_event(job)
 
 
 if __name__ == "__main__":
