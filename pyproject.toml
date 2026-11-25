@@ -15,6 +15,7 @@ license-files = ["LICENSE"]
 core = [
     "google-genai>=1.0.0",
     "faster-whisper>=1.0.0",
+    "av<19", # faster-whisper still passes the metadata_errors argument removed in PyAV 19.
 ]
 download = ["yt-dlp>=2024.10.22"]
 instagram = ["instagrapi>=2.1.0"]
@@ -26,6 +27,7 @@ web = [
 all = [
     "google-genai>=1.0.0",
     "faster-whisper>=1.0.0",
+    "av<19",
     "yt-dlp>=2024.10.22",
     "instagrapi>=2.1.0",
     "fastapi>=0.115.0",

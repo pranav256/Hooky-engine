@@ -60,6 +60,15 @@ def intercept_download(monkeypatch, rendering, fixture: Path, *, broken=False):
     monkeypatch.setattr(rendering.asyncio, "create_subprocess_exec", local_download)
 
 
+def test_whisper_decoder_reads_real_uploaded_media(local_media):
+    from faster_whisper.audio import decode_audio
+
+    samples = decode_audio(str(local_media), sampling_rate=16000)
+    assert samples.ndim == 1 and samples.dtype.name == "float32"
+    assert abs(len(samples) / 16000 - 3) < 0.1
+    assert abs(samples).max() > 0.01
+
+
 @pytest.mark.parametrize("framing", ["center", "fit"])
 def test_real_selective_render_fractional_timing_and_captions(tmp_path, monkeypatch, local_media, framing):
     from hooky.web import rendering
