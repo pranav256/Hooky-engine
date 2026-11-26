@@ -51,7 +51,7 @@ def validate_video_url(url: str) -> bool:
     from urllib.parse import urlparse
     try:
         parsed = urlparse(trimmed)
-        return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+        return parsed.scheme in {"http", "https"} and bool(parsed.hostname)
     except Exception:
         return False
 
