@@ -252,7 +252,7 @@ def test_comments_done_and_history_urls_are_seen_and_original_bytes_preserved(tm
     assert json.loads(channels.SEEN_FILE.read_text(encoding="utf-8"))["legacy-key"] == old_history["legacy-key"]
 
 
-def test_cache_ttl_key_and_compact_fields(tmp_path, monkeypatch):
+def test_cache_ttl_key_and_compact_fields(monkeypatch):
     calls, now = [], [100000.0]
     monkeypatch.setattr(channels.time, "time", lambda: now[0])
 
@@ -298,7 +298,7 @@ def test_corrupt_cache_refreshes_and_write_failure_is_nonfatal(monkeypatch):
     cache.parent.mkdir(parents=True)
     cache.write_text("broken")
     monkeypatch.setattr(channels, "_fetch_channel_entries", lambda *args: [video("one")])
-    monkeypatch.setattr(channels, "_atomic_json", lambda *args: (_ for _ in ()).throw(OSError("disk full")))
+    monkeypatch.setattr(channels, "atomic_json", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk full")))
     assert channels._load_channel_entries("@example", 0)[0]["id"] == "one"
     assert cache.read_text() == "broken"
 
@@ -397,7 +397,7 @@ def test_corrupt_history_is_preserved_and_stops_discovery(tmp_path):
     assert links.read_text() == ""
 
 
-def test_history_save_merges_latest_entries(monkeypatch):
+def test_history_save_merges_latest_entries():
     channels._save_history({"old": {"custom": "preserved"}})
     channels._save_history({"concurrent": {"views": 1}})
     channels._save_history({"new": {"views": 2}})

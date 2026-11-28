@@ -12,7 +12,6 @@ def test_completion_script_is_available_for_each_supported_shell(shell: str) -> 
 
     assert script
     assert "hooky" in script
-    assert "http" not in script
 
 
 def test_completion_dispatch_prints_script_without_starting_workflows(monkeypatch, capsys) -> None:

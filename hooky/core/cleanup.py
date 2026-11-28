@@ -24,7 +24,8 @@ def _protected_paths() -> set[Path]:
 
 def _can_remove(path: Path) -> bool:
     """Prevent cleanup from targeting project control files or directories."""
-    if path in _protected_paths() or path.resolve() in _protected_paths():
+    protected = _protected_paths()
+    if path in protected or path.resolve() in protected:
         return False
     return path.is_file() or path.is_symlink()
 

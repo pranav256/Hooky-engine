@@ -88,7 +88,8 @@ fi
 SKIP_SETUP="${SKIP_SETUP:-0}"
 
 if [ "${1:-}" = "--setup" ] || [ "${1:-}" = "setup" ]; then
-    exec "$ROOT/.venv/bin/python" -m hooky setup --redo
+    shift
+    exec "$ROOT/.venv/bin/python" -m hooky setup "$@"
 fi
 
 if [ ! -f "$ROOT/.env" ]; then

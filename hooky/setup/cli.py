@@ -145,27 +145,12 @@ def _validate_values(values: dict[str, str]) -> None:
         except ValueError as exc:
             raise SetupValidationError(f"{key} must be a positive integer") from exc
 
-    browser = values.get("YTDLP_COOKIES_FROM_BROWSER", "").strip()
-    cookie_file = values.get("YTDLP_COOKIES_FILE", "").strip()
-    if browser and cookie_file:
-        raise SetupValidationError("Choose browser cookies or a cookie file, not both")
-    if browser:
-        browser_name = browser.split("::", 1)[0].split(":", 1)[0].split("+", 1)[0].lower()
-        if browser_name not in YOUTUBE_BROWSERS:
-            raise SetupValidationError("YTDLP_COOKIES_FROM_BROWSER has an unsupported browser")
-    if cookie_file:
-        valid, reason = validate_cookie_file_metadata(cookie_file)
-        if not valid:
-            raise SetupValidationError(f"YTDLP_COOKIES_FILE metadata check failed: {reason}")
     # Reuse the downloader's syntax validator. It checks browser metadata and
     # cookie-file metadata only; it never opens a browser database or cookie
     # file contents.
     from ..core.downloader import youtube_auth_status
 
-    auth_status = youtube_auth_status({
-        "YTDLP_COOKIES_FROM_BROWSER": browser,
-        "YTDLP_COOKIES_FILE": cookie_file,
-    })
+    auth_status = youtube_auth_status(values)
     if not auth_status["ok"]:
         raise SetupValidationError(str(auth_status["message"]))
 
@@ -205,15 +190,7 @@ def _current_auth(values: dict[str, str]) -> str:
     return "anonymous"
 
 
-def _interactive_values(existing: dict[str, str], profile: SystemProfile) -> dict[str, str]:
-    """Run the short first-run wizard; adaptive defaults cover the rest."""
-    values = default_settings(config.PROJECT_ROOT, profile)
-    values.update(existing)
-    prompts = PromptSession()
-
-    values["GEMINI_API_KEY"] = prompts.secret(
-        "Gemini API key (required; hidden)", values.get("GEMINI_API_KEY", ""))
-
+def _prompt_youtube_auth(values: dict[str, str], prompts: PromptSession) -> None:
     existing_browser_value = values.get("YTDLP_COOKIES_FROM_BROWSER", "")
     existing_cookie_file = values.get("YTDLP_COOKIES_FILE", "")
     auth = prompts.choice("YouTube authentication", ("anonymous", "browser", "file"),
@@ -242,6 +219,8 @@ def _interactive_values(existing: dict[str, str], profile: SystemProfile) -> dic
             print(f"Cookie file metadata check failed: {reason}. The file contents were not read.")
             existing_cookie_file = ""
 
+
+def _prompt_instagram(values: dict[str, str], prompts: PromptSession) -> None:
     configure_instagram = prompts.boolean(
         "Configure optional Instagram credentials",
         bool(values.get("IG_USERNAME") and values.get("IG_PASSWORD")),
@@ -255,8 +234,17 @@ def _interactive_values(existing: dict[str, str], profile: SystemProfile) -> dic
     else:
         values["IG_USERNAME"] = values["IG_PASSWORD"] = values["IG_2FA_CODE"] = ""
 
-    values["HOOKY_SETUP_COMPLETE"] = "1"
-    values["HOOKY_SETUP_VERSION"] = "1"
+
+def _interactive_values(existing: dict[str, str], profile: SystemProfile) -> dict[str, str]:
+    """Run the short first-run wizard; adaptive defaults cover the rest."""
+    values = default_settings(config.PROJECT_ROOT, profile)
+    values.update(existing)
+    prompts = PromptSession()
+
+    values["GEMINI_API_KEY"] = prompts.secret(
+        "Gemini API key (required; hidden)", values.get("GEMINI_API_KEY", ""))
+    _prompt_youtube_auth(values, prompts)
+    _prompt_instagram(values, prompts)
     return values
 
 
@@ -288,30 +276,7 @@ def _interactive_advanced_values(
     values["GEMINI_SELECTION_CHUNK_CHARS"] = prompts.text(
         "Gemini transcript chunk characters", values.get("GEMINI_SELECTION_CHUNK_CHARS", "18000"))
 
-    existing_browser_value = values.get("YTDLP_COOKIES_FROM_BROWSER", "")
-    existing_cookie_file = values.get("YTDLP_COOKIES_FILE", "")
-    auth = prompts.choice("YouTube authentication", ("anonymous", "browser", "file"), _current_auth(values))
-    values["YTDLP_COOKIES_FROM_BROWSER"] = ""
-    values["YTDLP_COOKIES_FILE"] = ""
-    if auth == "browser":
-        browser_value = existing_browser_value
-        current_browser = browser_value.split("+", 1)[0].split(":", 1)[0] if browser_value else "firefox"
-        browser = prompts.choice("Browser", YOUTUBE_BROWSERS, current_browser.lower())
-        current_profile = ""
-        if ":" in browser_value:
-            current_profile = browser_value.split(":", 1)[1].split("::", 1)[0]
-        browser_profile = prompts.text("Browser profile (optional)", current_profile)
-        values["YTDLP_COOKIES_FROM_BROWSER"] = f"{browser}:{browser_profile}" if browser_profile else browser
-    elif auth == "file":
-        while True:
-            candidate = prompts.text("Netscape/Mozilla cookie file path", existing_cookie_file)
-            candidate = path_value(candidate, config.PROJECT_ROOT)
-            valid, reason = validate_cookie_file_metadata(candidate)
-            if valid:
-                values["YTDLP_COOKIES_FILE"] = candidate
-                break
-            print(f"Cookie file metadata check failed: {reason}. The file contents were not read.")
-            values["YTDLP_COOKIES_FILE"] = ""
+    _prompt_youtube_auth(values, prompts)
 
     values["WHISPER_MODEL"] = prompts.choice(
         "Whisper model", WHISPER_MODELS, values.get("WHISPER_MODEL", adaptive["WHISPER_MODEL"]))
@@ -379,17 +344,7 @@ def _interactive_advanced_values(
         prompts.boolean("Delete local clip files after confirmed Instagram posting", bool_value(
             values.get("DELETE_POSTED_CLIPS"), False)))
 
-    configure_instagram = prompts.boolean(
-        "Configure optional Instagram credentials", bool(values.get("IG_USERNAME") and values.get("IG_PASSWORD")))
-    if configure_instagram:
-        values["IG_USERNAME"] = prompts.text("Instagram username", values.get("IG_USERNAME", ""))
-        values["IG_PASSWORD"] = prompts.secret("Instagram password (hidden)", values.get("IG_PASSWORD", ""))
-        values["IG_2FA_CODE"] = prompts.secret(
-            "Instagram 2FA code (optional, hidden)", values.get("IG_2FA_CODE", ""))
-    else:
-        values["IG_USERNAME"] = values["IG_PASSWORD"] = values["IG_2FA_CODE"] = ""
-    values["HOOKY_SETUP_COMPLETE"] = "1"
-    values["HOOKY_SETUP_VERSION"] = "1"
+    _prompt_instagram(values, prompts)
     return values
 
 
@@ -419,10 +374,6 @@ def _noninteractive_values(
         values["YTDLP_COOKIES_FILE"] = ""
     if "YTDLP_COOKIES_FILE" in overrides and "YTDLP_COOKIES_FROM_BROWSER" not in overrides:
         values["YTDLP_COOKIES_FROM_BROWSER"] = ""
-    values["HOOKY_SETUP_COMPLETE"] = "1"
-    values["HOOKY_SETUP_VERSION"] = "1"
-    _normalise_bool_settings(values)
-    _validate_values(values)
     return values
 
 
@@ -445,9 +396,9 @@ def main(argv: Sequence[str] | None = None, *, prog: str = "hooky setup") -> int
 
     path = Path(config.ENV_FILE)
     try:
-        existing = _existing_values(path)
         if args.show:
             return _show(path)
+        existing = _existing_values(path)
         if existing.get("HOOKY_SETUP_COMPLETE") == "1" and not (
             args.redo or args.advanced or args.non_interactive
             or args.overrides or args.profile
@@ -465,8 +416,10 @@ def main(argv: Sequence[str] | None = None, *, prog: str = "hooky setup") -> int
                 _interactive_advanced_values(existing, profile)
                 if args.advanced else _interactive_values(existing, profile)
             )
-            _normalise_bool_settings(values)
-            _validate_values(values)
+        values["HOOKY_SETUP_COMPLETE"] = "1"
+        values["HOOKY_SETUP_VERSION"] = "1"
+        _normalise_bool_settings(values)
+        _validate_values(values)
 
         _print_settings(values)
         if not args.non_interactive and not args.overrides and not args.profile:

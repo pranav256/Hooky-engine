@@ -8,7 +8,6 @@ Usage:
 """
 from __future__ import annotations
 
-import os
 import sys
 import shutil
 import subprocess
@@ -32,9 +31,6 @@ def main() -> int:
     # Try importing hooky directly (if running inside .venv or environment)
     try:
         from hooky.cli import main as hooky_cli
-
-        cmd_args = args if args else ["web"]
-        return hooky_cli(cmd_args)
     except ImportError:
         # Not inside active virtualenv; delegate to project .venv python
         venv_python = ROOT / (".venv/Scripts/python.exe" if sys.platform == "win32" else ".venv/bin/python")
@@ -46,10 +42,12 @@ def main() -> int:
         print("[hooky] Virtual environment not detected. Running automated setup...")
         if sys.platform == "win32":
             script = ROOT / "main.ps1"
-            return subprocess.call(["powershell", "-ExecutionPolicy", "Bypass", "-File", str(script)])
+            return subprocess.call(["powershell", "-ExecutionPolicy", "Bypass", "-File", str(script), *args])
         else:
             script = ROOT / "main.sh"
-            return subprocess.call(["bash", str(script)])
+            return subprocess.call(["bash", str(script), *args])
+
+    return hooky_cli(args or ["web"])
 
 
 if __name__ == "__main__":

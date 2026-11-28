@@ -11,11 +11,11 @@ import signal
 import subprocess
 import sys
 import sysconfig
-import tempfile
 import time
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+from hooky.core.checkpoints import atomic_json as write_json
 from hooky.dotenv import SECRET_KEYS, MASK
 
 TERMINAL = {"completed", "failed", "cancelled", "interrupted"}
@@ -71,20 +71,11 @@ def close_windows_job(handle) -> None:
 
 
 def atomic_json(path: Path, value: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, name = tempfile.mkstemp(prefix=".job-", suffix=".tmp", dir=path.parent)
+    write_json(path, value, allow_nan=False, indent=None)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as output:
-            json.dump(value, output, ensure_ascii=False, allow_nan=False)
-            output.flush()
-            os.fsync(output.fileno())
-        Path(name).replace(path)
-        try:
-            path.chmod(0o600)
-        except OSError:
-            pass
-    finally:
-        Path(name).unlink(missing_ok=True)
+        path.chmod(0o600)
+    except OSError:
+        pass
 
 
 def append_log(job: dict, line: str) -> None:

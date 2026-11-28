@@ -143,9 +143,9 @@ def remap_words(words: list[dict], segments: list[dict]) -> list[dict]:
     return sorted(result, key=lambda word: word["start"])
 
 
-def plan_parts(segments: list[dict], words: list[dict], target_seconds: float = 60,
+def plan_parts(segments: list[dict], edited_words: list[dict], target_seconds: float = 60,
                 max_seconds: float = REELS_MAX_DURATION) -> list[dict]:
-    """Partition the edited timeline once, preferring nearby speech/scene boundaries."""
+    """Partition the story using words already mapped onto its edited timeline."""
     if not math.isfinite(target_seconds) or not 1 <= target_seconds <= max_seconds:
         raise ValueError("Invalid target part length")
     timeline = story_timeline(segments)
@@ -157,7 +157,6 @@ def plan_parts(segments: list[dict], words: list[dict], target_seconds: float = 
     tolerance = min(10, target_seconds * 0.2)
     minimum_tail = min(15, target_seconds / 3)
     preferred = {segment["timeline_end"] for segment in timeline}
-    edited_words = remap_words(words, segments)
     for index, word in enumerate(edited_words):
         next_start = edited_words[index + 1]["start"] if index + 1 < len(edited_words) else total
         if word["word"].rstrip().endswith((".", "!", "?")) or next_start - word["end"] >= 0.3:

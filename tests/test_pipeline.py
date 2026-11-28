@@ -1,20 +1,8 @@
 ﻿"""Pipeline orchestration regressions; no model, network, or FFmpeg needed."""
-import json
 from pathlib import Path
 
 from hooky.options import PipelineOptions
 from hooky.pipeline import Pipeline
-
-
-def test_cached_words_are_loaded_without_full_transcribe_api(tmp_path: Path) -> None:
-    cache = tmp_path / "master.words.json"
-    words = [{"start": 0.0, "end": 1.0, "word": "hello"}]
-    cache.write_text(json.dumps(words), encoding="utf-8")
-
-    pipeline = Pipeline(PipelineOptions(no_upload=True))
-
-    assert pipeline._load_words_cache(cache) == words
-    assert not hasattr(pipeline, "transcribe")
 
 
 def test_selected_transcription_requests_only_clip_windows(tmp_path: Path) -> None:

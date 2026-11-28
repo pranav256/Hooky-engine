@@ -13,6 +13,22 @@ import pytest
 from hooky.web import jobs
 
 
+def test_atomic_history_write_preserves_unicode_and_saved_file_on_nan(tmp_path):
+    path = tmp_path / "history" / "job.json"
+    value = {"title": "Café 雪", "progress": 35}
+    jobs.atomic_json(path, value)
+    saved = path.read_text(encoding="utf-8")
+    assert json.loads(saved) == value
+    assert value["title"] in saved and "\n" not in saved
+    if os.name != "nt":
+        assert path.stat().st_mode & 0o777 == 0o600
+
+    with pytest.raises(ValueError, match="Out of range float"):
+        jobs.atomic_json(path, {"progress": float("nan")})
+    assert path.read_text(encoding="utf-8") == saved
+    assert list(path.parent.glob("*.tmp")) == []
+
+
 @pytest.fixture
 def fixture_worker(tmp_path, monkeypatch):
     script = tmp_path / "fixture_worker.py"

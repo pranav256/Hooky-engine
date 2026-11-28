@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from hooky.parts.options import PartsOptions
+from hooky.options import PartsOptions
 from hooky.parts.planner import normalize_story, plan_parts, remap_words, valid_ranges
 
 
@@ -36,7 +36,7 @@ def test_omitted_speech_is_removed_and_retained_words_are_retimed():
 def test_parts_cover_retained_story_once_and_prefer_sentence_boundary():
     segments = [{"start": 5, "end": 45}, {"start": 80, "end": 150}]
     words = [{"start": 93, "end": 95, "word": "complete."}]
-    parts = plan_parts(segments, words, 60)
+    parts = plan_parts(segments, remap_words(words, segments), 60)
     assert [p["duration"] for p in parts] == [55, 55]
     assert parts[0]["segments"] == [
         {"start": 5, "end": 45, "offset": 0},
@@ -144,7 +144,7 @@ def test_fragment_resume_after_interruption_does_not_reencode_completed_fragment
 
 
 def test_whisper_full_story_windows_are_bounded_cached_and_deduplicated(tmp_path, monkeypatch):
-    from hooky.core import transcripts
+    from hooky.core import subtitles
 
     source = tmp_path / "video.mp4"
     source.write_bytes(b"video")
@@ -155,15 +155,15 @@ def test_whisper_full_story_windows_are_bounded_cached_and_deduplicated(tmp_path
         return [{"start": 299, "end": 299.5, "word": "first."},
                 {"start": 301, "end": 301.5, "word": "second."}]
 
-    monkeypatch.setattr(transcripts, "transcribe", transcribe)
-    captions, words = transcripts.transcribe_source(source, 600, tmp_path / "speech")
-    transcripts.transcribe_source(source, 600, tmp_path / "speech")
+    monkeypatch.setattr(subtitles, "transcribe", transcribe)
+    captions, words = subtitles.transcribe_source(source, 600, tmp_path / "speech")
+    subtitles.transcribe_source(source, 600, tmp_path / "speech")
     assert calls == [[0, 302], [298, 600]]
     assert [word["word"] for word in words] == ["first.", "second."]
     assert len(captions) == 2
 
 
-def test_parts_cli_validates_settings_before_download(tmp_path, monkeypatch):
+def test_parts_cli_validates_settings_before_download(monkeypatch):
     from hooky.parts import cli
 
     monkeypatch.setattr(cli, "expand_and_download", lambda *a: pytest.fail("download"))

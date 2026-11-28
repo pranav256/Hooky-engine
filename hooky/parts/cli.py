@@ -5,14 +5,14 @@ import argparse
 import os
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 from ..core.downloader import expand_and_download, is_url
-from ..core.queue import QueueError
 from ..core.source_text import load_caption_file
-from ..config import SUB_LANG, SUB_STYLE
+from ..config import SUB_LANG, SUB_STYLE, SUBTITLE_SOURCE
 from ..core.subtitles import STYLES
-from .options import PartsOptions
+from ..options import PartsOptions
 from .pipeline import PartsPipeline
 
 
@@ -31,7 +31,7 @@ def build_parser(prog: str = "Hooky-parts") -> argparse.ArgumentParser:
                         help="Preserve full source picture over a blurred or plain background")
     parser.add_argument("--out", type=Path, help="Export directory (default: output/parts/SOURCE_ID)")
     parser.add_argument("--caption-file", type=Path, help="Explicit timestamped VTT/SRT evidence")
-    parser.add_argument("--subtitle-source", choices=("auto", "source", "whisper"), default=None)
+    parser.add_argument("--subtitle-source", choices=("auto", "source", "whisper"), default=SUBTITLE_SOURCE)
     parser.add_argument("--sub-style", choices=tuple(STYLES), default=SUB_STYLE)
     parser.add_argument("--sub-lang", default=SUB_LANG, help="Whisper language, for example en")
     parser.add_argument("--no-subs", action="store_true", help="Export without burned-in subtitles")
@@ -41,15 +41,14 @@ def build_parser(prog: str = "Hooky-parts") -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None, *, prog: str = "Hooky-parts") -> int:
+def main(argv: Sequence[str] | None = None, *, prog: str = "hooky-parts") -> int:
     try:
         args = build_parser(prog=prog).parse_args(argv)
         options = PartsOptions(mode=args.mode, target_seconds=args.part_seconds, background=args.background,
                                out=args.out, no_subs=args.no_subs, sub_style=args.sub_style,
-                               sub_lang=args.sub_lang, labels=args.labels,
+                               sub_lang=args.sub_lang, subtitle_source=args.subtitle_source,
+                               labels=args.labels,
                                dry_run=args.dry_run, profile=args.profile)
-        if args.subtitle_source:
-            options.subtitle_source = args.subtitle_source
         transcript = None
         if args.caption_file:
             transcript = load_caption_file(args.caption_file)
@@ -74,11 +73,11 @@ def main(argv: list[str] | None = None, *, prog: str = "Hooky-parts") -> int:
         PartsPipeline(options).run(video, source_url=source_url, context=context,
                                    source_transcript=transcript)
         return 0
-    except (ValueError, OSError, RuntimeError, QueueError, subprocess.SubprocessError) as exc:
+    except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as exc:
         print(f"[parts] {exc}", file=sys.stderr)
         return 2
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(prog="Hooky-parts"))
 

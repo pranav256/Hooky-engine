@@ -67,7 +67,6 @@ _rate_limit_hits = 0  # 429s since the last successful call (run-wide)
 # doesn't have to stop the run: GEMINI_FALLBACK_MODELS is tried in order.
 # Current index into that list; -1 = still on GEMINI_MODEL (the .env primary).
 _fallback_idx = -1
-_rotation_log: list[str] = []  # remembered for --queue-status / debugging
 _dead_models: set[str] = set()  # 404-retired: never retried this process
 
 # Models that need thinking disabled/trimmed to avoid burning output tokens
@@ -123,12 +122,7 @@ def _advance_model() -> bool:
         return False
     _fallback_idx = nxt
     _skip_dead()
-    if 0 <= _fallback_idx < len(GEMINI_FALLBACK_MODELS):
-        model = GEMINI_FALLBACK_MODELS[_fallback_idx]
-        if model not in _rotation_log:
-            _rotation_log.append(model)
-        return True
-    return False
+    return 0 <= _fallback_idx < len(GEMINI_FALLBACK_MODELS)
 
 
 def _mark_retired(model: str) -> None:
@@ -138,9 +132,8 @@ def _mark_retired(model: str) -> None:
           file=sys.stderr)
 
 
-def _pace(model: str) -> None:
+def _pace() -> None:
     """Sleep so consecutive Gemini calls stay >= MIN_INTERVAL apart."""
-    del model  # pacing is model-agnostic today; kept per-call for future tuning
     global _last_call
     wait = MIN_INTERVAL - (time.time() - _last_call)
     if wait > 0:
@@ -246,7 +239,7 @@ def generate(prompt: str, *, parts: list | None = None,
         if _fallback_idx >= len(GEMINI_FALLBACK_MODELS):
             break  # every fallback (and the primary) is dead — give up below
         model = current_model()
-        _pace(model)
+        _pace()
         try:
             text = _call_model(client, model, contents, temperature,
                                max_output_tokens)
@@ -381,17 +374,4 @@ def check_gemini() -> int:
               "(GEMINI_MODEL_FALLBACKS) to stop the skip warnings.")
     print("  At least one model works — Hooky will auto-rotate onto it.")
     return 0
-
-
-def rotation_status() -> str:
-    """Human-readable rotation summary for --queue-status / debugging."""
-    parts = []
-    if _rotation_log:
-        parts.append(f"rotated through: {', '.join(_rotation_log)}")
-    if _dead_models:
-        parts.append(f"retired: {', '.join(sorted(_dead_models))}")
-    summary = "; ".join(parts)
-    if summary:
-        return f"Gemini model: {current_model()} ({summary})"
-    return f"Gemini model: {current_model()} (no rotation this run)"
 

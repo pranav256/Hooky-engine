@@ -9,14 +9,13 @@ from ..core.checkpoints import (atomic_json, digest, file_revision, load_checkpo
                                 save_checkpoint, source_id)
 from ..core.highlights import find_highlights
 from ..core.lowspec import WHISPER_COMPUTE, WHISPER_MODEL
-from ..core.profiling import PipelineProfile
+from ..core.logbook import PipelineProfile
 from ..core.queue import file_lock
 from ..core.source_text import (caption_words, load_caption_file,
                                  sidecar_caption_file)
-from ..core.subtitles import build_ass, transcribe
-from ..core.transcripts import transcribe_source
+from ..core.subtitles import build_ass, transcribe, transcribe_source
 from ..core.utils import get_duration
-from .options import PartsOptions
+from ..options import PartsOptions
 from .planner import normalize_story, plan_parts, remap_words, select_story
 from .renderer import render_part
 
@@ -88,7 +87,7 @@ class PartsPipeline:
                 original_words = caption_words(transcript)
             edited_words = remap_words(original_words, story)
         with profile.stage("parts_plan"):
-            parts = plan_parts(story, original_words, options.target_seconds)
+            parts = plan_parts(story, edited_words, options.target_seconds)
         plan = {"version": 1, "source": str(video), "source_url": source_url,
                 "source_duration": duration, "selection_evidence": evidence,
                 "story_segments": story, "retained_seconds": sum(s["end"] - s["start"] for s in story),
@@ -102,6 +101,13 @@ class PartsPipeline:
             return plan
         if not options.no_subs and not edited_words:
             raise ValueError("No subtitle words in the retained story; review captions or use --no-subs")
+        return self._export(video, directory, plan, original_words, edited_words, profile)
+
+    def _export(self, video: Path, directory: Path, plan: dict,
+                original_words: list[dict], edited_words: list[dict],
+                profile: PipelineProfile) -> dict:
+        options = self.options
+        parts = plan["parts"]
         manifest = {**plan, "complete": False, "exports": []}
         atomic_json(directory / "manifest.json", manifest)
         with profile.stage("render"):
@@ -189,19 +195,5 @@ class PartsPipeline:
             profile.save(directory / "profile.json")
             return plan
 
-        manifest = {**plan, "complete": False, "exports": []}
-        atomic_json(directory / "manifest.json", manifest)
-        with profile.stage("render"):
-            for part in parts:
-                path = self.state["render_part"](
-                    video, part, [], directory, options, len(parts))
-                manifest["exports"].append({"index": part["index"], "path": str(path),
-                                            "duration": part["duration"],
-                                            "segments": part["segments"]})
-                atomic_json(directory / "manifest.json", manifest)
-        manifest["complete"] = True
-        atomic_json(directory / "manifest.json", manifest)
-        profile.save(directory / "profile.json")
-        print(f"[parts] Exported {len(parts)} number-only parts to {directory}")
-        return manifest
+        return self._export(video, directory, plan, [], [], profile)
 

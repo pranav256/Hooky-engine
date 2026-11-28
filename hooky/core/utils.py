@@ -18,17 +18,18 @@ def _probe_key(path: Path) -> tuple[str, int, int]:
 
 
 @lru_cache(maxsize=256)
-def _get_duration_cached(path: str, _mtime_ns: int, _size: int) -> float:
+def _probe_media_cached(path: str, _mtime_ns: int, _size: int) -> dict:
+    """Read duration and stream types once for each file revision."""
     result = subprocess.run([
-        "ffprobe", "-v", "error", "-select_streams", "v:0",
-        "-show_entries", "format=duration", "-of", "json", path,
+        "ffprobe", "-v", "error", "-show_entries",
+        "format=duration:stream=codec_type", "-of", "json", path,
     ], capture_output=True, text=True, check=True, timeout=30)
-    return float(json.loads(result.stdout)["format"]["duration"])
+    return json.loads(result.stdout)
 
 
 def get_duration(path: Path) -> float:
     """Return video duration using ffprobe, cached per file revision."""
-    return _get_duration_cached(*_probe_key(path))
+    return float(_probe_media_cached(*_probe_key(path))["format"]["duration"])
 
 
 def format_timestamp(seconds: float) -> str:
@@ -61,18 +62,13 @@ def clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
 
-@lru_cache(maxsize=256)
-def _has_audio_cached(path: str, _mtime_ns: int, _size: int) -> bool:
-    result = subprocess.run([
-        "ffprobe", "-v", "error", "-select_streams", "a:0",
-        "-show_entries", "stream=index", "-of", "csv=p=0", path,
-    ], capture_output=True, text=True, timeout=30)
-    return result.returncode == 0 and result.stdout.strip() != ""
-
-
 def has_audio(path: Path) -> bool:
     """Return whether the video has at least one audio stream."""
-    return _has_audio_cached(*_probe_key(path))
+    try:
+        metadata = _probe_media_cached(*_probe_key(path))
+    except subprocess.CalledProcessError:
+        return False
+    return any(stream.get("codec_type") == "audio" for stream in metadata.get("streams", []))
 
 
 def safe_duration_clamp(start: float, end: float, total: float) -> tuple[float, float]:

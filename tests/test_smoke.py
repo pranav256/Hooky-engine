@@ -71,7 +71,7 @@ def test_synthetic_clip_has_instagram_shape_subtitles_and_audio(tmp_path: Path) 
 def test_story_parts_join_ranges_preserve_audio_and_resume(tmp_path: Path) -> None:
     """Two numbered parts; the first joins two non-contiguous source ranges."""
     from hooky.core.utils import get_duration
-    from hooky.parts.options import PartsOptions
+    from hooky.options import PartsOptions
     from hooky.parts.planner import plan_parts
     from hooky.parts.renderer import render_part
 

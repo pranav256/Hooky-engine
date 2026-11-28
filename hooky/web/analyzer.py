@@ -199,8 +199,6 @@ def calculate_hook_density(cues: list[dict]) -> list[dict]:
 
 def extract_ranked_scenes(
     cues: list[dict],
-    video_title: str,
-    video_id: str,
     duration: float,
     max_clips: int = 10,
 ) -> list[dict]:
@@ -304,12 +302,11 @@ def extract_ranked_scenes(
     return ranked
 
 
-def build_dynamic_hooks_from_cues(cues: list[dict], video_title: str, video_id: str, duration: float) -> list[dict]:
+def build_dynamic_hooks_from_cues(cues: list[dict], video_id: str, top_blocks: list[dict]) -> list[dict]:
     """Dynamically derive 4 high-retention moments directly from timestamped transcript cues."""
     if not cues:
         return []
 
-    top_blocks = calculate_hook_density(cues)
     selected_blocks = []
     for b in top_blocks:
         if all(b["end"] <= s["start"] or b["start"] >= s["end"] for s in selected_blocks):
@@ -605,6 +602,7 @@ async def run_analysis_pipeline(url: str, job: dict, topic: str = "") -> dict[st
     cache_dir = Path(os.environ.get("HOOKY_WEB_CACHE_DIR") or OUTPUT_DIR / "web_cache")
     cache_dir.mkdir(parents=True, exist_ok=True)
     cues: list[dict] = []
+    top_blocks: list[dict] | None = None
 
     def log(msg: str):
         print(msg)
@@ -624,7 +622,7 @@ async def run_analysis_pipeline(url: str, job: dict, topic: str = "") -> dict[st
         job["step_number"] = 3
 
         # Automatic framing & subtitle detection
-        speaker_turn_count = sum(1 for c in cues if ">>" in c.get("text", "")) if cues else 0
+        speaker_turn_count = sum(1 for c in cues if ">>" in c.get("text", ""))
         table_keywords = {"mafia", "game", "poker", "table", "players", "round", "panel", "debate", "guests", "tech legends"}
         is_multi_speaker = speaker_turn_count > 8 or any(kw in title.lower() for kw in table_keywords)
 
@@ -648,7 +646,7 @@ async def run_analysis_pipeline(url: str, job: dict, topic: str = "") -> dict[st
                              "notice": notice, "hooks": hooks}
             return job["result"]
 
-        top_blocks = calculate_hook_density(cues) if cues else []
+        top_blocks = calculate_hook_density(cues)
         log(f"[algorithm] Scored {len(top_blocks)} dialogue candidate windows across entire video")
         log(f"[smart-config] Framing: {auto_framing.upper()} ({framing_reason}) | Style: {auto_style.upper()}")
         for idx, b in enumerate(top_blocks[:3]):
@@ -661,26 +659,20 @@ async def run_analysis_pipeline(url: str, job: dict, topic: str = "") -> dict[st
         log("[gemini] Dispatching high-retention prompt to Gemini...")
 
         # Build transcript sample with high-tension blocks and early moments
-        transcript_sample = ""
-        if cues:
-            selected_cues = cues[:120]
-            # Add cues from top scored tension blocks
-            for block in top_blocks[:4]:
-                b_cues = [c for c in cues if c["start"] >= block["start"] - 1 and c["end"] <= block["end"] + 1]
-                selected_cues.extend(b_cues)
-            # Deduplicate by start
-            seen_starts = set()
-            unique_cues = []
-            for c in sorted(selected_cues, key=lambda x: x["start"]):
-                if round(c["start"], 1) not in seen_starts:
-                    seen_starts.add(round(c["start"], 1))
-                    unique_cues.append(c)
-
-            sample_lines = [
-                f"[{format_timestamp(c['start'])} - {format_timestamp(c['end'])}] {c['text']}"
-                for c in unique_cues[:180]
-            ]
-            transcript_sample = "\n".join(sample_lines)
+        selected_cues = cues[:120]
+        for block in top_blocks[:4]:
+            selected_cues.extend(c for c in cues if c["start"] >= block["start"] - 1 and c["end"] <= block["end"] + 1)
+        seen_starts = set()
+        unique_cues = []
+        for cue in sorted(selected_cues, key=lambda cue: cue["start"]):
+            rounded_start = round(cue["start"], 1)
+            if rounded_start not in seen_starts:
+                seen_starts.add(rounded_start)
+                unique_cues.append(cue)
+        transcript_sample = "\n".join(
+            f"[{format_timestamp(c['start'])} - {format_timestamp(c['end'])}] {c['text']}"
+            for c in unique_cues[:180]
+        )
 
         prompt = f"""You are an elite short-form video editor extracting the highest-retention moments from this YouTube video for vertical 9:16 Instagram Reels and YouTube Shorts.
 Video Title: {title}
@@ -728,13 +720,12 @@ For EACH moment, return valid JSON array:
                         e = s + 35.0
 
                     # Snap to closest cue boundaries if cues exist
-                    if cues:
-                        matching_starts = [c["start"] for c in cues if abs(c["start"] - s) <= 6.0]
-                        if matching_starts:
-                            s = min(matching_starts, key=lambda x: abs(x - s))
-                        matching_ends = [c["end"] for c in cues if abs(c["end"] - e) <= 6.0]
-                        if matching_ends:
-                            e = min(matching_ends, key=lambda x: abs(x - e))
+                    matching_starts = [c["start"] for c in cues if abs(c["start"] - s) <= 6.0]
+                    if matching_starts:
+                        s = min(matching_starts, key=lambda x: abs(x - s))
+                    matching_ends = [c["end"] for c in cues if abs(c["end"] - e) <= 6.0]
+                    if matching_ends:
+                        e = min(matching_ends, key=lambda x: abs(x - e))
 
                     if e <= s + 5.0:
                         e = s + 25.0
@@ -752,14 +743,10 @@ For EACH moment, return valid JSON array:
                         words_list = ["VIRAL", "MOMENT", "DETECTED"]
 
                     # Extract verbatim dialogue lines
-                    dialogue_lines = []
-                    if cues:
-                        clip_cues = [c for c in cues if c["start"] >= s - 0.2 and c["end"] <= e + 0.2]
-                        for c in clip_cues:
-                            dialogue_lines.append({
-                                "time": format_timestamp(c["start"]),
-                                "text": c.get("text", "").strip()
-                            })
+                    dialogue_lines = [
+                        {"time": format_timestamp(c["start"]), "text": c.get("text", "").strip()}
+                        for c in cues if c["start"] >= s - 0.2 and c["end"] <= e + 0.2
+                    ]
 
                     formatted_hooks.append({
                         "id": f"hook_{idx + 1}",
@@ -787,7 +774,7 @@ For EACH moment, return valid JSON array:
         # Step 5: If Gemini didn't return valid hooks, use dynamic cue-derived hooks
         if not formatted_hooks:
             log("[algorithm] Deriving hooks dynamically from video speech density...")
-            formatted_hooks = build_dynamic_hooks_from_cues(cues, title, video_id, duration)
+            formatted_hooks = build_dynamic_hooks_from_cues(cues, video_id, top_blocks)
             for idx, h in enumerate(formatted_hooks):
                 log(f"[algorithm] Hook #{idx + 1}: [{h['start_fmt']} - {h['end_fmt']}] '{h['title']}'")
 
@@ -795,8 +782,6 @@ For EACH moment, return valid JSON array:
             raise RuntimeError("No usable speech or video hooks were found.")
 
         for hook in formatted_hooks:
-            hook.pop("retention_score", None)
-            hook.setdefault("selection_method", "Speech and keyword suggestion")
             hook["cues"] = _caption_cues(cues, hook["start"], hook["end"])
 
         job["step"] = f"Analysis complete! {len(formatted_hooks)} suggested clips are ready for vertical export."
@@ -824,7 +809,9 @@ For EACH moment, return valid JSON array:
         job["error"] = str(exc)
 
         # Dynamic fallback from cues if any exist; never fabricate fake dialogue
-        fallback_hooks = build_dynamic_hooks_from_cues(cues, "Video Highlight", extract_youtube_id(url), 0.0) if cues and not topic else []
+        if cues and not topic and top_blocks is None:
+            top_blocks = calculate_hook_density(cues)
+        fallback_hooks = build_dynamic_hooks_from_cues(cues, extract_youtube_id(url), top_blocks) if cues and not topic else []
         return {
             "status": "partial" if fallback_hooks else "failed",
             "video_title": "Video Highlight",

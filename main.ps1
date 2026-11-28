@@ -47,35 +47,33 @@ if (-not $SkipFfmpeg -and (-not (Get-Command ffmpeg -ErrorAction SilentlyContinu
     }
 }
 
-# 2. Verify uv
-$uvCommand = $null
-$uv = Get-Command uv -ErrorAction SilentlyContinue
-if ($null -ne $uv) {
-    $uvCommand = $uv.Source
-} else {
-    $candidate = Join-Path $HOME ".local\bin\uv.exe"
-    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-        $uvCommand = $candidate
+# 2. Bootstrap uv and dependencies only when the virtual environment is missing
+$Python = Join-Path $Root ".venv\Scripts\python.exe"
+if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
+    $uvCommand = $null
+    $uv = Get-Command uv -ErrorAction SilentlyContinue
+    if ($null -ne $uv) {
+        $uvCommand = $uv.Source
     } else {
-        Write-Host "[hooky] Installing uv package manager..." -ForegroundColor Cyan
-        irm https://astral.sh/uv/install.ps1 | iex
+        $candidate = Join-Path $HOME ".local\bin\uv.exe"
         if (Test-Path -LiteralPath $candidate -PathType Leaf) {
             $uvCommand = $candidate
         } else {
-            $uv = Get-Command uv -ErrorAction SilentlyContinue
-            if ($null -ne $uv) { $uvCommand = $uv.Source }
+            Write-Host "[hooky] Installing uv package manager..." -ForegroundColor Cyan
+            irm https://astral.sh/uv/install.ps1 | iex
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+                $uvCommand = $candidate
+            } else {
+                $uv = Get-Command uv -ErrorAction SilentlyContinue
+                if ($null -ne $uv) { $uvCommand = $uv.Source }
+            }
         }
     }
-}
-
-# 3. Sync Virtual Environment if needed
-$Python = Join-Path $Root ".venv\Scripts\python.exe"
-if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
     Write-Host "[hooky] Setting up Python virtual environment and dependencies..." -ForegroundColor Cyan
     Invoke-Checked $uvCommand @("sync", "--extra", "all")
 }
 
-# 4. Check .env and prompt for environment configuration choices
+# 3. Check .env and prompt for environment configuration choices
 $EnvFile = Join-Path $Root ".env"
 $EnvExample = Join-Path $Root ".env.example"
 $isInteractive = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected
@@ -107,7 +105,7 @@ if ($ConfigureEnv) {
 
 $env:HOOKY_LAUNCHER_PROMPTED = "1"
 
-# 5. Determine command: if no arguments provided, default to launching Web Studio ('web')
+# 4. Determine command: if no arguments provided, default to launching Web Studio ('web')
 [string[]]$RunArgs = if ($CommandArgs.Count -eq 0) { @("web") } else { $CommandArgs }
 
 Write-Host "`n[hooky] Launching Hooky ($($RunArgs -join ' '))...`n" -ForegroundColor Green

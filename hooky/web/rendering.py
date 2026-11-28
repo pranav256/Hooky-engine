@@ -119,7 +119,7 @@ async def make_url(payload: dict, job: dict, cache: Path) -> list[str]:
     url = payload["target"]
     metadata, cues = await prepare_source(url, cache, job)
     duration = metadata.get("duration", 0)
-    hooks = extract_ranked_scenes(cues, metadata.get("title", "Video"), extract_youtube_id(url), duration,
+    hooks = extract_ranked_scenes(cues, duration,
                                   max_clips=min(10, max(4, int(duration // 240) + 1)) if duration else 6)
     if not hooks:
         raise RuntimeError("No usable speech clips were found; analyze another source or select a clip manually.")

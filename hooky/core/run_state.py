@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 import time
 from pathlib import Path
 
 from ..config import LINKS_FILE, PROJECT_ROOT
+from .checkpoints import atomic_json
 
 
 def state_dir() -> Path:
@@ -40,21 +40,6 @@ def load_failures(links_path: Path | None = None) -> dict[str, dict]:
     return _read(failures_path(links_path))
 
 
-def _write(path: Path, value: dict[str, dict]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-    temp = Path(name)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(value, handle, indent=2, sort_keys=True, allow_nan=False)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temp, path)
-    finally:
-        temp.unlink(missing_ok=True)
-
-
 def record_failure(
     line_no: int,
     source: str,
@@ -77,7 +62,7 @@ def record_failure(
         "last_at": time.time(),
         "retryable": bool(retryable),
     }
-    _write(path, failures)
+    atomic_json(path, failures, sort_keys=True, allow_nan=False)
 
 
 def clear_failure(line_no: int, links_path: Path | None = None) -> None:
@@ -87,7 +72,7 @@ def clear_failure(line_no: int, links_path: Path | None = None) -> None:
         return
     failures.pop(str(line_no), None)
     if failures:
-        _write(path, failures)
+        atomic_json(path, failures, sort_keys=True, allow_nan=False)
     else:
         path.unlink(missing_ok=True)
 

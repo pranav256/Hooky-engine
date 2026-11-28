@@ -43,7 +43,7 @@ dev = [
 
 [project.scripts]
 hooky = "hooky.cli:main"
-hooky-parts = "hooky.parts_cli:main"
+hooky-parts = "hooky.parts.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["hooky*"]

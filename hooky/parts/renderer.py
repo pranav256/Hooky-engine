@@ -12,7 +12,7 @@ from ..core.cutter import cut_clip, encoding_profile
 from ..core.lowspec import lowspec_input_args
 from ..core.subtitles import STYLES, build_ass
 from ..core.utils import get_duration, has_audio
-from .options import PartsOptions
+from ..options import PartsOptions
 
 
 def valid_part(path: Path, expected: float) -> bool:
@@ -51,15 +51,15 @@ def render_part(video: Path, part: dict, words: list[dict], output_dir: Path,
     fragments = []
     for index, fragment in enumerate(part["segments"], 1):
         start, end = fragment["start"], fragment["end"]
-        selected = [word for word in words if word["start"] < end and word["end"] > start]
         fragment_signature = {"part": signature, "fragment": fragment}
         rendered = fragments_dir / f"fragment_{index:03d}.mp4"
         state = fragments_dir / f"fragment_{index:03d}.json"
-        ass = None
-        if selected:
-            ass = rendered.with_suffix(".ass")
-            ass.write_text(build_ass(selected, start, end, options.sub_style), encoding="utf-8")
         if not (load_checkpoint(state, fragment_signature) and valid_part(rendered, end - start)):
+            selected = [word for word in words if word["start"] < end and word["end"] > start]
+            ass = None
+            if selected:
+                ass = rendered.with_suffix(".ass")
+                ass.write_text(build_ass(selected, start, end, options.sub_style), encoding="utf-8")
             cut_clip(video, start, end, rendered, ass_path=ass,
                      framing="fit" if options.background == "blur" else "pad",
                      background_height=480 if options.background == "blur" else 0, label=label)

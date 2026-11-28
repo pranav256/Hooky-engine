@@ -16,10 +16,6 @@ from .config import (CHANNELS_FILE, GEMINI_API_KEY, LINKS_FILE, OUTPUT_DIR,
 _GIB = 1024 ** 3
 
 
-def _raw_args(argv: Sequence[str] | None) -> list[str]:
-    return list(sys.argv[1:] if argv is None else argv)
-
-
 def _pipeline(args: Sequence[str], *, prog: str = "hooky") -> int:
     return pipeline_cli.main(list(args), prog=prog)
 
@@ -94,28 +90,29 @@ def _preflight(*, needs_download: bool = False,
     return 0
 
 
+def _completed_link_count() -> int:
+    try:
+        return sum(
+            1 for raw in LINKS_FILE.read_text(encoding="utf-8").splitlines()
+            if raw.strip().upper().startswith("DONE ") or "# DONE" in raw.upper()
+        )
+    except OSError:
+        return 0
+
+
+def _output_clips() -> list[Path]:
+    try:
+        return [path for path in OUTPUT_DIR.rglob("*.mp4") if path.is_file()]
+    except OSError:
+        return []
+
+
 def _link_file_stats() -> tuple[int, int, int]:
     """Return pending links, completed lines, and generated clip count."""
     from .core.downloader import parse_links_file
 
-    pending = len(parse_links_file(LINKS_FILE))
-    done = 0
-    if LINKS_FILE.exists():
-        try:
-            done = sum(
-                1 for raw in LINKS_FILE.read_text(encoding="utf-8").splitlines()
-                if raw.strip().upper().startswith("DONE ")
-                or "# DONE" in raw.upper()
-            )
-        except OSError:
-            pass
-    clips = 0
-    if OUTPUT_DIR.exists():
-        try:
-            clips = sum(1 for path in OUTPUT_DIR.rglob("*.mp4") if path.is_file())
-        except OSError:
-            pass
-    return pending, done, clips
+    return (len(parse_links_file(LINKS_FILE)), _completed_link_count(),
+            len(_output_clips()))
 
 
 def _process_links_file() -> int:
@@ -125,11 +122,11 @@ def _process_links_file() -> int:
 
     _, done_before, clips_before = _link_file_stats()
     failures_before = load_failures(LINKS_FILE)
+    entries = parse_links_file(LINKS_FILE)
     needs_download = any(
         entry.get("url", "").lower().startswith(("http://", "https://"))
-        for entry in parse_links_file(LINKS_FILE)
+        for entry in entries
     )
-    entries = parse_links_file(LINKS_FILE)
     preflight = _preflight(needs_download=needs_download, entries=entries)
     if preflight:
         return preflight
@@ -137,8 +134,7 @@ def _process_links_file() -> int:
     pending_after, done_after, clips_after = _link_file_stats()
     failures_after = load_failures(LINKS_FILE)
     new_failures = any(
-        failures_after.get(key) != value for key, value in failures_after.items()
-        if failures_before.get(key) != value
+        failures_before.get(key) != value for key, value in failures_after.items()
     )
     final_result = result or (2 if new_failures else 0)
     print("[hooky] Run complete" if final_result == 0 else "[hooky] Run finished with errors")
@@ -193,15 +189,6 @@ def _make(args: Sequence[str]) -> int:
         preflight = _preflight(needs_download=True, entries=link_entries)
         if preflight:
             return preflight
-        try:
-            import yt_dlp  # noqa: F401 - discovery requires the optional package
-        except ImportError:
-            print(
-                "[hooky] yt-dlp is required for channel discovery. "
-                "Install it with: uv sync --locked --extra all",
-                file=sys.stderr,
-            )
-            return 2
         result = _pipeline(["--source"])
         if result:
             return result
@@ -241,21 +228,17 @@ def _run_links_file() -> int:
 
 def _post(args: Sequence[str]) -> int:
     if not args:
-        result = _pipeline(["--post-now"])
-        from .desktop import notify
+        command, message = "--post-now", "Instagram posting workflow finished"
+    elif list(args) in (["--due"], ["--post-due"]):
+        command, message = "--post-due", "Scheduled Instagram posting workflow finished"
+    else:
+        print("Usage: hooky post [--due]", file=sys.stderr)
+        return 1
+    result = _pipeline([command])
+    from .desktop import notify
 
-        notify("Hooky posting complete" if result == 0 else "Hooky posting failed",
-               "Instagram posting workflow finished")
-        return result
-    if list(args) in (["--due"], ["--post-due"]):
-        result = _pipeline(["--post-due"])
-        from .desktop import notify
-
-        notify("Hooky posting complete" if result == 0 else "Hooky posting failed",
-               "Scheduled Instagram posting workflow finished")
-        return result
-    print("Usage: hooky post [--due]", file=sys.stderr)
-    return 1
+    notify("Hooky posting complete" if result == 0 else "Hooky posting failed", message)
+    return result
 
 
 def _open(args: Sequence[str]) -> int:
@@ -511,16 +494,7 @@ def _status() -> int:
     from .core.run_state import load_failures
 
     failures = load_failures(LINKS_FILE)
-    done = 0
-    if LINKS_FILE.exists():
-        try:
-            done = sum(
-                1 for raw in LINKS_FILE.read_text(encoding="utf-8").splitlines()
-                if raw.strip().upper().startswith("DONE ")
-                or "# DONE" in raw.upper()
-            )
-        except OSError:
-            done = 0
+    done = _completed_link_count()
     channels = parse_channels_file(CHANNELS_FILE)
 
     print("Hooky status")
@@ -558,12 +532,7 @@ def _status() -> int:
     except Exception as exc:
         print(f"\nQueue\n  FAIL queue unavailable: {exc}")
 
-    clips = []
-    if OUTPUT_DIR.exists():
-        try:
-            clips = [path for path in OUTPUT_DIR.rglob("*.mp4") if path.is_file()]
-        except OSError:
-            clips = []
+    clips = _output_clips()
     print("\nOutput")
     print(f"  directory:     {OUTPUT_DIR}")
     print(f"  clips:         {len(clips)}")
@@ -674,7 +643,9 @@ def _doctor(args: Sequence[str]) -> int:
     print(f"[youtube] {status['message']}")
     if not status["ok"]:
         return 2
-    return check_youtube_access(args[1]) if len(args) > 1 else 0
+    if len(args) > 1:
+        return 0 if check_youtube_access(args[1]) else 2
+    return 0
 
 
 def _completion(args: Sequence[str]) -> int:
@@ -685,31 +656,6 @@ def _completion(args: Sequence[str]) -> int:
         return 0
     print("Usage: hooky completion bash|zsh|fish|powershell", file=sys.stderr)
     return 1
-
-
-def _complete(args: Sequence[str]) -> int:
-    from .completion import complete_command
-
-    return complete_command(args)
-
-
-def _file_source_command(command: str, args: Sequence[str] = ()) -> int:
-    if command == "links":
-        return _source_file("link")
-    if command == "channels":
-        return _source_file("channel")
-    if command == "status":
-        return _status()
-    if command == "doctor":
-        return _doctor(args)
-    if command in {"add", "catalog", "sources", "import", "run-source"}:
-        print(
-            "[hooky] Source management uses channels.txt and links.txt. "
-            "Edit those files directly.",
-            file=sys.stderr,
-        )
-        return 1
-    return -1
 
 
 def _help() -> int:
@@ -734,7 +680,7 @@ def _help() -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run Hooky's normal command-line workflows."""
-    args = _raw_args(argv)
+    args = list(sys.argv[1:] if argv is None else argv)
     if not args:
         return _run_links_file()
 
@@ -751,7 +697,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if command == "completion":
         return _completion(rest)
     if command == "__complete":
-        return _complete(rest)
+        from .completion import complete_command
+
+        return complete_command(rest)
     if command == "open":
         return _open(rest)
     if command in {"cleanup", "clean"}:
@@ -763,9 +711,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _preview()
     if command == "retry":
         return _retry(rest)
-    source_result = _file_source_command(command, rest)
-    if source_result >= 0:
-        return source_result
+    if command == "links":
+        return _source_file("link")
+    if command == "channels":
+        return _source_file("channel")
+    if command == "status":
+        return _status()
+    if command == "doctor":
+        return _doctor(rest)
+    if command in {"add", "catalog", "sources", "import", "run-source"}:
+        print(
+            "[hooky] Source management uses channels.txt and links.txt. "
+            "Edit those files directly.",
+            file=sys.stderr,
+        )
+        return 1
     if command == "make":
         return _make(rest)
     if command == "parts":

@@ -1,16 +1,9 @@
-﻿"""Fast tests for the new brains: AUTO clip planning + speech-boundary snapping.
-
-Run with:  python -m pytest tests/test_highlights.py  (or: python tests/test_highlights.py)
-No ffmpeg, no Gemini, no network needed.
-"""
-import sys
+﻿"""Offline AUTO clip planning and speech-boundary snapping."""
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from hooky.core.highlights import (  # noqa: E402
+from hooky.core.highlights import (
     plan_auto_clips, snap_clip_boundaries,
 )
 
@@ -60,7 +53,6 @@ def test_plan_auto_scales_with_duration() -> None:
     # clamped ceiling
     nbig, _, _ = plan_auto_clips(24 * 3600)
     assert nbig <= 40, f"24h should cap at 40, got {nbig}"
-    print("PLAN_AUTO_OK")
 
 
 def test_snap_start_lands_after_pause() -> None:
@@ -74,11 +66,10 @@ def test_snap_start_lands_after_pause() -> None:
     from hooky.core.highlights import _snap_start
     # Gemini wanted 13.0 (mid-pause): snapped start should begin the next word
     t = _snap_start(13.0, words, 7.0, 19.0)
-    assert abs(t - 13.52) < 1.0 or abs(t - 14.0) < 0.5, f"start not on speech edge: {t}"
+    assert 14.0 <= t <= 14.05, f"start not on speech edge: {t}"
     # Gemini wanted 15.5 (mid-word/thought): nearest pause-start word begins it
     t2 = _snap_start(15.5, words, 9.0, 19.5)
     assert t2 <= 15.5, f"start must not move later than requested: {t2}"
-    print("SNAP_START_OK")
 
 
 def test_snap_end_lands_on_sentence() -> None:
@@ -95,7 +86,6 @@ def test_snap_end_lands_on_sentence() -> None:
     # Gemini wanted 14.5 (mid-phrase): should extend to end of "idea." + beat
     t = _snap_end(14.5, words, 11.5, 17.0)
     assert 15.8 <= t <= 17.0, f"end should land on 'idea.' + 0.25, got {t}"
-    print("SNAP_END_OK")
 
 
 def test_snap_respects_length_limits() -> None:
@@ -104,16 +94,14 @@ def test_snap_respects_length_limits() -> None:
              for i in range(0, 60)]
     clips = [{"start": 20.0, "end": 40.0, "reason": "r"}]
     out = snap_clip_boundaries(clips, words, clip_min=15, clip_max=60)
-    assert out and out[0]["end"] - out[0]["start"] >= 10, \
+    assert out and 15 <= out[0]["end"] - out[0]["start"] <= 60, \
         f"snapping destroyed the clip length: {out}"
-    print("SNAP_LIMITS_OK")
 
 
 def test_no_words_is_noop() -> None:
     clips = [{"start": 5.0, "end": 30.0, "reason": "r"}]
     assert snap_clip_boundaries(clips, None, 15, 60) == clips
     assert snap_clip_boundaries([], [{"start": 0, "end": 1, "word": "x"}], 15, 60) == []
-    print("NOOP_OK")
 
 
 def test_visual_analysis_frames_are_reused_for_retries(tmp_path, monkeypatch):
@@ -135,13 +123,3 @@ def test_visual_analysis_frames_are_reused_for_retries(tmp_path, monkeypatch):
 
     assert first == second
     assert len(calls) == 3
-
-
-if __name__ == "__main__":
-    test_plan_auto_scales_with_duration()
-    test_snap_start_lands_after_pause()
-    test_snap_end_lands_on_sentence()
-    test_snap_respects_length_limits()
-    test_no_words_is_noop()
-    print("HIGHLIGHTS_TESTS_PASSED")
-

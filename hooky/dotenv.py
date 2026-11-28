@@ -4,6 +4,8 @@ from __future__ import annotations
 import math
 import re
 
+from .quality import QUALITY_PRESETS
+
 KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 SECRET_KEYS = {"GEMINI_API_KEY", "IG_PASSWORD", "IG_2FA_CODE", "HOOKY_WEB_TOKEN"}
 MASK = "••••••••"
@@ -75,7 +77,7 @@ def validate_settings(values: dict[str, str]) -> None:
         if any(char in value for char in "\r\n\0"):
             raise ValueError(f"{key} must be a single-line value.")
     choices = {
-        "QUALITY": {"highest", "maximum", "max", "high", "low", "fast"},
+        "QUALITY": set(QUALITY_PRESETS) | {"maximum", "max", "fast"},
         "SUB_STYLE": {"hormozi", "clean", "yellow", "gold", "titanium", "minimal", "emerald", "crimson"},
         "SUBTITLE_SOURCE": {"auto", "source", "whisper"},
         "AUTO_CLIP_MODE": {"content", "duration"},

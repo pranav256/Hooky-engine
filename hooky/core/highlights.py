@@ -515,9 +515,7 @@ def _semantic_highlights(transcript: list[dict], source: Path, duration: float,
     for batch_start in range(0, len(chosen), 6):
         batch = chosen[batch_start:batch_start + 6]
         with tempfile.TemporaryDirectory(prefix="hooky_review_") as tmp:
-            descriptions = []
-            for index, clip in enumerate(batch):
-                descriptions.append({"index": index, **clip})
+            descriptions = [{"index": index, **clip} for index, clip in enumerate(batch)]
             review_prompt = (
                 "Check visual suitability of these transcript-selected windows. Exactly two "
                 "frames per candidate, in candidate order. Reject only clearly unusable blank, "

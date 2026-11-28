@@ -7,9 +7,6 @@ from pathlib import Path
 
 from ..config import IG_2FA_CODE, IG_PASSWORD, IG_USERNAME, SESSION_FILE
 
-NAME = "instagram"
-LABEL = "Instagram"
-
 
 class UploadUncertainError(RuntimeError):
     """The request may have reached Instagram but returned no confirmation."""

@@ -309,10 +309,6 @@ def _pick_height(duration: float | None) -> int:
 ANALYSIS_HEIGHT = 480
 
 
-def _analysis_path(master: Path) -> Path:
-    return master.with_name(master.stem + "_analysis.mp4")
-
-
 def make_analysis_twin(master: Path) -> Path | None:
     """Create (or reuse) a 480p proxy of the master for AI analysis.
 
@@ -321,7 +317,7 @@ def make_analysis_twin(master: Path) -> Path | None:
     """
     if not master.exists() or master.stat().st_size == 0:
         return None
-    twin = _analysis_path(master)
+    twin = master.with_name(master.stem + "_analysis.mp4")
     if twin.exists() and twin.stat().st_size > 0 \
             and twin.stat().st_mtime >= master.stat().st_mtime - 1:
         return twin                      # already built (or master unchanged)
@@ -377,7 +373,7 @@ def parse_links_file(links_path: Path) -> list[dict]:
         # Accept the older plain ``DONE <url>`` marker as well as ``# DONE``.
         if line.upper().startswith("DONE "):
             continue
-        if "# DONE" in raw or "# DONE" in line.upper():
+        if "# DONE" in line.upper():
             continue
 
         parts = [p.strip() for p in line.split("|")]
@@ -421,8 +417,7 @@ def is_url(text: str) -> bool:
     return bool(VIDEO_HOST_HINTS.match(text.strip()))
 
 
-def _already_downloaded(url: str, info: dict | None = None,
-                        min_requested_height: int | None = None) -> Path | None:
+def _already_downloaded(url: str, min_requested_height: int | None = None) -> Path | None:
     """Find a suitable cached file for this link.
 
     A cache made with a lower quality cap must not silently satisfy a later
@@ -534,12 +529,11 @@ def expand_and_download(entry: dict, limits: dict) -> tuple[list[dict], bool]:
         flat_entries = [entry for entry in flat_entries if entry]
         if max_sources:
             flat_entries = flat_entries[:max(1, int(max_sources))]
-        items = [(entry, None) for entry in flat_entries]
+        items = flat_entries
     else:
-        items = [(info, None)]
+        items = [info]
 
-    downloaded_any = False
-    for flat, _ in items:
+    for flat in items:
         video_id = str(flat.get("id", ""))
 
         # Adaptive source quality: decide the master cap from the video's
@@ -553,7 +547,6 @@ def expand_and_download(entry: dict, limits: dict) -> tuple[list[dict], bool]:
         height = _pick_height(duration)
         source_url = flat.get("url") or flat.get("webpage_url") or url
         cached = _already_downloaded(source_url, min_requested_height=height)
-        caption_path = None
         if cached is not None:
             caption_path = _caption_path_from_metadata(cached)
             if caption_path is None:
@@ -561,10 +554,8 @@ def expand_and_download(entry: dict, limits: dict) -> tuple[list[dict], bool]:
                     source_url, video_id, DOWNLOADS_DIR)
             print(f"[links] Cached ({height}p quality target), skipping download: "
                   f"{cached.name}")
-            videos.append(_video_entry(cached, source_url, None, entry, limits,
-                                       cached_meta=flat,
+            videos.append(_video_entry(cached, source_url, flat, entry, limits,
                                        source_caption_path=caption_path))
-            downloaded_any = True
             continue
         dl_opts = dict(ydl_opts)
         dl_opts["format"] = _format_string(height)
@@ -573,7 +564,6 @@ def expand_and_download(entry: dict, limits: dict) -> tuple[list[dict], bool]:
         print(f"[links] {flat.get('title', video_id)[:60]}: {len_note} "
               f"-> downloading master at <= {height}p")
 
-        full = None
         try:
             with yt_dlp.YoutubeDL(dl_opts) as ydl:
                 full = ydl.extract_info(flat.get("url") or flat.get("webpage_url") or url,
@@ -619,11 +609,10 @@ def expand_and_download(entry: dict, limits: dict) -> tuple[list[dict], bool]:
 
         videos.append(_video_entry(file_path, source_url, merged, entry, limits,
                                    source_caption_path=caption_path))
-        downloaded_any = True
 
     if limits.get("make_analysis", True):
         _attach_analysis(videos)
-    return videos, downloaded_any
+    return videos, bool(videos)
 
 
 def _caption_path_from_metadata(video_path: Path) -> Path | None:
@@ -638,20 +627,19 @@ def _caption_path_from_metadata(video_path: Path) -> Path | None:
 
 
 def _video_entry(path: Path, url: str | None, info: dict | None, entry: dict,
-                 limits: dict, cached_meta: dict | None = None,
+                 limits: dict,
                  source_caption_path: Path | None = None) -> dict:
-    meta = info or cached_meta or {}
-    merged = _merge_info(cached_meta, info)
+    meta = info or {}
     caption_path = source_caption_path or sidecar_caption_file(path)
     return {
         "path": path,
-        "url": url or (meta.get("webpage_url") if meta else None),
-        "video_id": merged.get("id") or merged.get("video_id") or "",
+        "url": url or meta.get("webpage_url"),
+        "video_id": meta.get("id") or meta.get("video_id") or "",
         "source_transcript": load_caption_file(caption_path),
         "source_caption_path": str(caption_path) if caption_path else "",
-        "title": merged.get("title") or path.stem,
-        "description": (merged.get("description") or "")[:1200],
-        "uploader": merged.get("uploader") or merged.get("channel") or "",
+        "title": meta.get("title") or path.stem,
+        "description": (meta.get("description") or "")[:1200],
+        "uploader": meta.get("uploader") or meta.get("channel") or "",
         # clips=None -> AUTO: content determines the count by default
         "clips": entry["clips"] if entry["clips"] is not None else limits["clips"],
         "min_len": entry["min_len"] or limits["min"],

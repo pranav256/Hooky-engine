@@ -129,22 +129,12 @@ def make_cover(video_path: Path, timestamp: float, out_path: Path,
     return out_path
 
 
-def _words_digest(words: list[dict] | None) -> str:
-    if not words:
-        return ""
-    return digest(words)
-
-
 def _load_render_state(path: Path) -> dict:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
     except (OSError, json.JSONDecodeError):
         return {}
-
-
-def _save_render_state(path: Path, state: dict) -> None:
-    atomic_json(path, state)
 
 
 def _valid_render(path: Path, duration: float) -> bool:
@@ -177,8 +167,8 @@ def cut_all_clips(video_path: Path, clips: list[dict], output_dir: Path | None =
             "version": 3, **source_signature,
             "start": round(start, 3), "end": round(end, 3),
             "framing": clip.get("framing", "center"),
-            "sub_style": STYLES[sub_style], "font": FONT_OVERRIDE,
-            "words": _words_digest(selected_words),
+            "sub_style": STYLES[sub_style],
+            "words": digest(selected_words) if selected_words else "",
             **encoding_profile(),
         }
         stem = f"reel_{identity}_{digest(signature)[:8]}"
@@ -200,11 +190,11 @@ def cut_all_clips(video_path: Path, clips: list[dict], output_dir: Path | None =
             if framing == "fit":
                 cut_kwargs["background_height"] = 480
             cut_clip(video_path, start, end, clip_path, **cut_kwargs)
+            # Commit video completion before optional cover work so it can resume independently.
+            render_state[stem] = {"signature": signature}
+            atomic_json(render_state_path, render_state)
         else:
             print(f"[clip] Reusing completed {clip_path.name}")
-        # Commit video completion before optional cover work so it can resume independently.
-        render_state[stem] = {"signature": signature}
-        _save_render_state(render_state_path, render_state)
         entry: dict = {
             "index": i, "clip_id": identity,
             "start": start,
@@ -226,10 +216,6 @@ def cut_all_clips(video_path: Path, clips: list[dict], output_dir: Path | None =
                 entry["cover"] = None
         else:
             entry["cover"] = None
-        if make_covers:
-            render_state[stem] = {"signature": signature,
-                                  "cover": bool(entry.get("cover"))}
-            _save_render_state(render_state_path, render_state)
         results.append(entry)
     return results
 

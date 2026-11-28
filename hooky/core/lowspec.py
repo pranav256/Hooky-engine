@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import os
 
+from ..quality import runtime_quality_preset
+
 # --- Whisper (speech-to-text) ---------------------------------------------
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "tiny")       # tiny|base|small
 WHISPER_COMPUTE = os.environ.get("WHISPER_COMPUTE", "int8").strip().lower() or "int8"   # int8 = fast on old CPUs
@@ -28,20 +30,10 @@ except ValueError:
 # 1080x1920 H.264 source with as little avoidable loss as practical.
 QUALITY = os.environ.get("QUALITY", "highest").strip().lower()
 
-if QUALITY in {"highest", "maximum", "max"}:
-    X264_CRF = "15"
-    # At a fixed CRF, slow mainly saves a little file size at a large time
-    # cost. Medium keeps nearly the same visual quality and is much faster.
-    X264_PRESET = os.environ.get("X264_PRESET", "medium").strip().lower()
-    AUDIO_BITRATE = "256k"
-elif QUALITY == "high":
-    X264_CRF = "17"
-    X264_PRESET = os.environ.get("X264_PRESET", "medium").strip().lower()
-    AUDIO_BITRATE = "192k"
-else:
-    X264_CRF = "21"
-    X264_PRESET = os.environ.get("X264_PRESET", "veryfast").strip().lower()
-    AUDIO_BITRATE = "128k"
+_QUALITY_PRESET = runtime_quality_preset(QUALITY)
+X264_CRF = _QUALITY_PRESET.x264_crf
+X264_PRESET = os.environ.get("X264_PRESET", _QUALITY_PRESET.x264_preset).strip().lower()
+AUDIO_BITRATE = _QUALITY_PRESET.audio_bitrate
 
 
 def lowspec_encode_args() -> list[str]:

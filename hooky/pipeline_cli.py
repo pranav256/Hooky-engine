@@ -438,11 +438,6 @@ def ingest_links(args) -> None:
                 failure_error = f"Pipeline failed for {video['path'].name}"
                 print(f"[links] Phase: analyzing {video['path'].name}")
                 pipeline.options.sub_style = style
-                if args.subtitle_source:
-                    pipeline.options.subtitle_source = args.subtitle_source
-                if args.make_covers is not None:
-                    pipeline.options.make_covers = args.make_covers
-                pipeline.options.profile = args.profile
                 pipeline.options.no_subs = args.no_subs if video["no_subs"] is None else video["no_subs"]
                 pipeline.options.clips = (0 if str(video["clips"]).lower() in ("auto", "0")
                                           else video["clips"])

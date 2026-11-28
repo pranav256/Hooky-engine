@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from hooky.parts.options import PartsOptions
+from hooky.options import PartsOptions
 
 
 def test_number_only_options_force_numeric_label_and_no_subtitles():

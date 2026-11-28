@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 
 from .dotenv import parse_dotenv
+from .quality import runtime_quality_preset
 
 PROJECT_ROOT = Path(os.environ.get("HOOKY_PROJECT_ROOT") or Path(__file__).resolve().parent.parent)
 ENV_FILE = PROJECT_ROOT / ".env"
@@ -99,22 +100,18 @@ TARGET_FPS = 30
 # only contributes about 608 horizontal pixels to a 9:16 crop, so the default
 # highest profile keeps more source detail: 1440p for long videos and up to
 # 2160p for short ones. Set SOURCE_MAX_HEIGHT to pin one cap for everything.
-_QUALITY_MODE = os.environ.get("QUALITY", "highest").strip().lower()
+_QUALITY_PRESET = runtime_quality_preset(os.environ.get("QUALITY", "highest").strip().lower())
 _PINNED_HEIGHT = os.environ.get("SOURCE_MAX_HEIGHT", "").strip()
 SOURCE_LONG_THRESHOLD_MINUTES = float(
     os.environ.get("SOURCE_LONG_THRESHOLD_MINUTES", "10"))
 if _PINNED_HEIGHT:
     SOURCE_MAX_HEIGHT_LONG = int(_PINNED_HEIGHT)
     SOURCE_MAX_HEIGHT_SHORT = int(_PINNED_HEIGHT)
-elif _QUALITY_MODE in {"highest", "maximum", "max"}:
-    SOURCE_MAX_HEIGHT_LONG = int(os.environ.get("SOURCE_MAX_HEIGHT_LONG", "1440"))
-    SOURCE_MAX_HEIGHT_SHORT = int(os.environ.get("SOURCE_MAX_HEIGHT_SHORT", "2160"))
-elif _QUALITY_MODE == "high":
-    SOURCE_MAX_HEIGHT_LONG = int(os.environ.get("SOURCE_MAX_HEIGHT_LONG", "1080"))
-    SOURCE_MAX_HEIGHT_SHORT = int(os.environ.get("SOURCE_MAX_HEIGHT_SHORT", "1440"))
 else:
-    SOURCE_MAX_HEIGHT_LONG = int(os.environ.get("SOURCE_MAX_HEIGHT_LONG", "720"))
-    SOURCE_MAX_HEIGHT_SHORT = int(os.environ.get("SOURCE_MAX_HEIGHT_SHORT", "1080"))
+    SOURCE_MAX_HEIGHT_LONG = int(os.environ.get(
+        "SOURCE_MAX_HEIGHT_LONG", _QUALITY_PRESET.source_max_height_long))
+    SOURCE_MAX_HEIGHT_SHORT = int(os.environ.get(
+        "SOURCE_MAX_HEIGHT_SHORT", _QUALITY_PRESET.source_max_height_short))
 SOURCE_LONG_SECONDS = SOURCE_LONG_THRESHOLD_MINUTES * 60.0
 
 # --- Posting window ----------------------------------------------------------

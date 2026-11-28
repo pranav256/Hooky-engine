@@ -53,13 +53,15 @@ def test_batch_worker_emits_immediate_clip_checkpoint(tmp_path, monkeypatch, cap
     assert events[-1]["status"] == "failed"
 
 
-@pytest.mark.parametrize("outcome", ["success", "ai_fallback", "source_failure"])
+@pytest.mark.parametrize("outcome", ["success", "ai_fallback", "source_failure", "metadata_failure"])
 def test_analysis_worker_publishes_job_progress_and_result(tmp_path, monkeypatch, capsys, outcome):
     from hooky.web import analyzer
 
     monkeypatch.setattr(config, "OUTPUT_DIR", tmp_path)
     monkeypatch.setattr(worker.os, "environ", os.environ.copy())
     metadata = {"title": "Sample source", "duration": 60, "id": "EDCwQe7P8T0"}
+    if outcome == "metadata_failure":
+        metadata["title"] = None
     cues = [{"start": i * 2, "end": i * 2 + 2, "text": "A useful idea about code and investing."}
             for i in range(30)]
     prepare = AsyncMock(return_value=(metadata, cues))
@@ -70,6 +72,8 @@ def test_analysis_worker_publishes_job_progress_and_result(tmp_path, monkeypatch
     if outcome == "ai_fallback":
         generate.side_effect = RuntimeError("AI unavailable")
     monkeypatch.setattr(analyzer, "generate", generate)
+    density = Mock(wraps=analyzer.calculate_hook_density)
+    monkeypatch.setattr(analyzer, "calculate_hook_density", density)
     job = {"id": "analysis_fixture", "type": "analyze", "status": "running", "progress": 5}
 
     code = asyncio.run(worker.run({"job": job, "payload": {"url": "https://example.com/video"}}))
@@ -84,6 +88,13 @@ def test_analysis_worker_publishes_job_progress_and_result(tmp_path, monkeypatch
         assert job["error"] == "Source unavailable"
         assert job["result"]["hooks"] == []
         generate.assert_not_called()
+        density.assert_not_called()
+    elif outcome == "metadata_failure":
+        assert code == 1 and events[-1]["status"] == "failed"
+        assert job["result"]["status"] == "partial"
+        assert job["result"]["error"] == job["error"]
+        generate.assert_not_called()
+        density.assert_called_once_with(cues)
     else:
         assert code == 0 and events[-1]["status"] == "completed"
         assert events[-1]["progress"] == 100
@@ -91,6 +102,15 @@ def test_analysis_worker_publishes_job_progress_and_result(tmp_path, monkeypatch
         assert job["result"]["hooks"]
         assert job["step_number"] == 5
         generate.assert_called_once()
+        density.assert_called_once_with(cues)
+    if outcome in {"ai_fallback", "metadata_failure"}:
+        hook = job["result"]["hooks"][0]
+        assert (hook["start"], hook["end"]) == (0, 24)
+        assert hook["selection_method"] == "Speech and keyword suggestion"
+        assert hook["hook_quote"] == "A useful idea about code and investing"
+        assert [line["text"] for line in hook["dialogue"]] == [cue["text"] for cue in cues[:12]]
+        if outcome == "ai_fallback":
+            assert hook["cues"] == cues[:12]
 
 
 @pytest.mark.parametrize("target", ["", "@example", "local"])
@@ -117,11 +137,7 @@ def test_cli_worker_keeps_queue_done_markers_and_owns_its_outputs(tmp_path, monk
         reel = owned / "Source" / "reel_finished.mp4"
         reel.parent.mkdir(parents=True)
         reel.write_bytes(b"valid clip" * 300)
-        process = Mock()
-        async def wait():
-            return 0
-        process.wait = wait
-        return process
+        return Mock(wait=AsyncMock(return_value=0))
     monkeypatch.setattr(worker.asyncio, "create_subprocess_exec", fake_cli)
     job = {"id": "make_fixture", "type": "make", "status": "running", "progress": 5}
     assert asyncio.run(worker.run({"job": job, "payload": {"target": target, "style": "gold", "framing": "center"}})) == 0
@@ -138,13 +154,36 @@ def test_empty_cli_job_cannot_claim_another_workers_output(tmp_path, monkeypatch
     monkeypatch.setattr(worker.os, "environ", os.environ.copy())
     async def concurrent_render(*args, **kwargs):
         (output / "reel_other_worker.mp4").write_bytes(b"other worker" * 300)
-        process = Mock()
-        async def wait():
-            return 0
-        process.wait = wait
-        return process
+        return Mock(wait=AsyncMock(return_value=0))
     monkeypatch.setattr(worker.asyncio, "create_subprocess_exec", concurrent_render)
     job = {"id": "make_empty", "type": "make", "status": "running", "progress": 5}
     assert asyncio.run(worker.run({"job": job, "payload": {"target": "", "style": "gold", "framing": "center"}})) == 1
     assert job["status"] == "failed" and not job.get("output_file")
     assert "no new complete reels" in job["error"]
+
+
+@pytest.mark.parametrize("kind", ["render_clip", "draft"])
+@pytest.mark.parametrize("url", ["local:" + "a" * 32, "https://example.com/video"], ids=["local", "remote"])
+def test_render_worker_delegates_source_preparation_to_shared_renderer(tmp_path, monkeypatch, kind, url):
+    from hooky.web import analyzer, rendering
+
+    monkeypatch.setattr(config, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(worker.os, "environ", os.environ.copy())
+    prepare = AsyncMock(side_effect=AssertionError("Only the shared renderer prepares sources"))
+    monkeypatch.setattr(analyzer, "prepare_source", prepare)
+    monkeypatch.setattr(rendering, "prepare_source", prepare)
+    render = AsyncMock(return_value="Source/reel.mp4")
+    monkeypatch.setattr(rendering, "render_clip", render)
+    job = {"id": "render_fixture", "type": kind, "status": "running", "progress": 5}
+    payload = {"url": url, "start": 1, "end": 10, "style": "gold", "framing": "center", "draft": kind == "draft"}
+
+    assert asyncio.run(worker.run({"job": job, "payload": payload})) == 0
+    render.assert_awaited_once_with(payload, job, tmp_path / "web_cache" / job["id"])
+    prepare.assert_not_awaited()
+    assert job["status"] == "completed" and job["progress"] == 100
+    if kind == "draft":
+        assert job["result"] == {"draft_url": "/api/jobs/render_fixture/draft"}
+        assert "output_file" not in job
+    else:
+        assert job["output_file"] == "Source/reel.mp4"
+        assert job["output_files"] == ["Source/reel.mp4"]

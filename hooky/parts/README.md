@@ -8,10 +8,10 @@ condensed, chronological series of vertical parts.
 From the repository root, after the main project's setup:
 
 ```bash
-./hooky.sh parts story.mp4
-./hooky.sh parts 'https://www.youtube.com/watch?v=VIDEO_ID'
-./hooky.sh parts story.mp4 --part-seconds 60 --labels
-./hooky.sh parts story.mp4 --caption-file story.srt --dry-run
+./main.sh parts story.mp4
+./main.sh parts 'https://www.youtube.com/watch?v=VIDEO_ID'
+./main.sh parts story.mp4 --part-seconds 60 --labels
+./main.sh parts story.mp4 --caption-file story.srt --dry-run
 ```
 
 Python: `.venv/bin/hooky-parts story.mp4`.
@@ -22,8 +22,8 @@ moments and the export should contain only numeric overlays, use the
 number-only variant:
 
 ```bash
-./hooky.sh number-parts cartoon.mp4
-./hooky.sh parts cartoon.mp4 --mode number-only --part-seconds 60
+./main.sh number-parts cartoon.mp4
+./main.sh parts cartoon.mp4 --mode number-only --part-seconds 60
 ```
 
 It runs Gemini over the source to find funny, surprising, absurd, reaction,
@@ -60,7 +60,7 @@ the default for `hooky-parts`.
 | `--labels` | Visible `Part N / Total` label in the upper padding. |
 | `--caption-file FILE` | Use a specific VTT/SRT track as spoken evidence. |
 | `--subtitle-source auto\|source\|whisper` | Prefer captions, require captions, or regenerate retained subtitle timing. |
-| `--sub-style NAME` | Existing `hormozi`, `clean`, or `yellow` subtitle styles. |
+| `--sub-style NAME` | Caption preset; list all choices with `./main.sh styles`. |
 | `--sub-lang LANG` | Whisper language hint. |
 | `--no-subs` | Export without burned-in subtitles. |
 | `--dry-run` | Write the story and parts plan before rendering. |
@@ -90,7 +90,7 @@ temporary assembly fragments. Blurring runs at 480p before scaling up.
 ## Modules
 
 - `cli.py` / `__main__.py`: local-file and single-URL entry points.
-- `options.py`: validated parts options.
+- `hooky/options.py`: shared, validated pipeline and parts options.
 - `planner.py`: AI story beats, chronology, timeline mapping, and part boundaries.
 - `renderer.py`: resumable per-fragment encoding and final assembly.
 - `pipeline.py`: evidence acquisition, checkpoints, manifests, and export orchestration.

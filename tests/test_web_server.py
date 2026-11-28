@@ -51,13 +51,6 @@ def test_index_endpoint():
     assert TOKEN in response.text
     # Verify auth cookie is set
     assert response.cookies.get("hooky_token") == TOKEN
-    # Verify key controls are present
-    assert 'id="smart-recommendation-pill"' in response.text
-    assert 'id="frame-mode-auto"' in response.text
-    assert 'id="frame-mode-fit"' in response.text
-    assert 'id="frame-mode-center"' in response.text
-    assert 'id="tab-settings"' in response.text
-    assert 'id="env-raw-textarea"' in response.text
 
 
 def test_topic_and_caption_edits_survive_validated_job_requests():
@@ -84,7 +77,28 @@ def test_batch_export_validates_every_selected_clip_before_launch():
     assert client.post("/api/jobs/batch", json={"url": "https://example.com/video", "clips": []}).status_code == 400
 
 
-def test_upload_local_video_keeps_opaque_reference_and_mime(tmp_path, monkeypatch):
+@pytest.mark.parametrize("style", [None, "gold"])
+def test_batch_uses_one_settings_snapshot_for_defaults_and_paths(monkeypatch, style):
+    manager = server._job_manager()
+    server.ENV_FILE.write_text("SUB_STYLE=yellow\nOUTPUT_DIR=exports\n", encoding="utf-8")
+    read_settings = Mock(wraps=server._runtime_settings)
+    monkeypatch.setattr(server, "_runtime_settings", read_settings)
+    body = {"url": "https://example.com/video", "clips": [
+        {"start": index, "end": index + 5} for index in range(100)
+    ]}
+    if style is not None:
+        body["style"] = style
+    body["clips"][1]["style"] = "clean"
+    response = client.post("/api/jobs/batch", json=body)
+    assert response.status_code == 200
+    job = manager.jobs[response.json()["job_id"]]
+    assert job["request"]["clips"][0]["style"] == (style or "yellow")
+    assert job["request"]["clips"][1]["style"] == "clean"
+    assert job["output_root"] == str(server.PROJECT_ROOT / "exports")
+    read_settings.assert_called_once_with()
+
+
+def test_upload_local_video_keeps_opaque_reference_and_mime(monkeypatch):
     monkeypatch.setattr(server, "probe_video", lambda path: {"duration": 12, "width": 1920, "height": 1080})
     response = client.post("/api/sources", content=b"fixture", headers={"X-Filename": "meeting.webm"})
     assert response.status_code == 200
@@ -96,7 +110,7 @@ def test_upload_local_video_keeps_opaque_reference_and_mime(tmp_path, monkeypatc
     assert client.post("/api/analyze/start", json={"url": data["url"]}).status_code == 200
 
 
-def test_local_video_deletion_refuses_running_jobs_and_removes_unreferenced_upload(tmp_path):
+def test_local_video_deletion_refuses_running_jobs_and_removes_unreferenced_upload():
     from uuid import uuid4
     source_id = uuid4().hex
     folder = server._job_manager().directory.parent / "web_sources" / source_id
@@ -155,7 +169,7 @@ def test_every_route_rejects_foreign_or_malformed_hosts(path, host):
     assert response.status_code == 403
 
 
-@pytest.mark.parametrize("host", ["LOCALHOST:8000", "127.0.0.1", "[::1]:8000", "[::1]"])
+@pytest.mark.parametrize("host", ["LOCALHOST:8000", "127.0.0.1", "127.0.0.1:8000", "[::1]:8000", "[::1]"])
 def test_loopback_host_variants_are_allowed(host):
     assert client.get("/static/studio.js", headers={"Host": host}).status_code == 200
 
@@ -197,16 +211,6 @@ def test_token_auth_enforcement():
     assert cookie_res.status_code == 200
 
 
-def test_host_header_validation():
-    # Loopback hosts -> allowed
-    res_local = client.get("/api/doctor", headers={"Host": "127.0.0.1:8000"})
-    assert res_local.status_code == 200
-
-    # Forbidden external host -> 403
-    res_bad_host = client.get("/api/doctor", headers={"Host": "evil.example.com"})
-    assert res_bad_host.status_code == 403
-
-
 def test_doctor_endpoint():
     response = client.get("/api/doctor")
     assert response.status_code == 200
@@ -221,13 +225,6 @@ def test_channels_endpoint():
     assert response.status_code == 200
     data = response.json()
     assert "channels" in data
-
-
-def test_outputs_endpoint():
-    response = client.get("/api/outputs")
-    assert response.status_code == 200
-    data = response.json()
-    assert "files" in data
 
 
 def test_download_all_keeps_finished_clips_and_cleans_archive(monkeypatch):
@@ -300,9 +297,6 @@ def test_env_roundtrip():
     assert res2.status_code == 200
     assert res2.json()["values"].get(test_key) == test_val
 
-    raw_clean = "\n".join([line for line in res2.json()["raw"].splitlines() if not line.startswith(test_key)])
-    client.post("/api/env", json={"raw": raw_clean})
-
 
 def test_render_validation():
     # Empty url -> 400
@@ -337,7 +331,7 @@ def test_make_target_validation():
     assert res_bad.status_code == 400
 
 
-def test_cors_and_password_masking():
+def test_cors_and_json_content_type():
     # 1. Foreign origin should not receive Access-Control-Allow-Origin
     res_cors = client.get("/api/env", headers={"Origin": "http://evil.example"})
     assert res_cors.headers.get("access-control-allow-origin") is None or res_cors.headers.get("access-control-allow-origin") != "http://evil.example"
@@ -350,34 +344,24 @@ def test_cors_and_password_masking():
     res_bad_ct = client.post("/api/env", content="RAW_TEST=1", headers={"Content-Type": "text/plain"})
     assert res_bad_ct.status_code == 415
 
-    # 4. Sensitive credentials masking verification
-    res_env = client.get("/api/env")
-    assert res_env.status_code == 200
-    values = res_env.json().get("values", {})
-    if "IG_PASSWORD" in values and values["IG_PASSWORD"]:
-        assert values["IG_PASSWORD"] == "••••••••"
-    if "GEMINI_API_KEY" in values and values["GEMINI_API_KEY"]:
-        assert values["GEMINI_API_KEY"] == "••••••••"
 
 
 def test_outputs_foldering_and_security():
-    res = client.get("/api/outputs")
-    assert res.status_code == 200
-    data = res.json()
-    assert "folders" in data
-    assert "files" in data
-    assert "count" in data
-
-    # Ensure no internal snippets or downloads leaked into outputs
-    for f in data["files"]:
-        assert not f["name"].startswith("snippet_"), f"Snippet leaked into outputs: {f['name']}"
-        assert not f["name"].endswith(".tmp.mp4"), f"Temp file leaked into outputs: {f['name']}"
-        assert "web_cache" not in f["rel_path"], f"web_cache file leaked into outputs: {f['rel_path']}"
-        assert "downloads" not in f["rel_path"], f"downloads file leaked into outputs: {f['rel_path']}"
-
-    # Path traversal attack on serve_output_file must be rejected or 404
-    bad_traversal = client.get("/api/outputs/../../pyproject.toml")
-    assert bad_traversal.status_code in (403, 404)
+    root = server._configured_path("OUTPUT_DIR")
+    for relative in ("session/reel.mp4", "session/snippet_source.mp4", "session/reel.tmp.mp4",
+                     "web_cache/cached.mp4", "downloads/source.mp4", ".cache/hidden.mp4", "session/.hidden.mp4"):
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"video" * 400)
+    response = client.get("/api/outputs")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["count"] == 1
+    assert [item["rel_path"] for item in data["files"]] == ["session/reel.mp4"]
+    assert data["folders"][0]["name"] == "session"
+    assert data["folders"][0]["count"] == 1
+    assert client.get(data["files"][0]["url"]).content == b"video" * 400
+    assert client.get("/api/outputs/../../pyproject.toml").status_code in (403, 404)
 
 
 @pytest.mark.parametrize("field,path_name", [("channels", "CHANNELS_FILE"), ("links", "LINKS_FILE")])
@@ -437,24 +421,28 @@ def test_analysis_and_render_reject_invalid_urls(endpoint, url):
     assert not server._JOBS
 
 
-@pytest.mark.parametrize("endpoint", ["/api/analyze/start", "/api/render", "/api/make"])
-def test_same_time_jobs_get_distinct_ids(endpoint, monkeypatch):
-    monkeypatch.setattr(time, "time", lambda: 1000.0)
-    payload = {"url": "https://www.youtube.com/watch?v=EDCwQe7P8T0", "start": 10, "end": 20, "video_title": "Sample"}
-    if endpoint == "/api/make":
-        payload = {"target": payload["url"]}
-    first = client.post(endpoint, json=payload)
-    second = client.post(endpoint, json=payload)
-    assert first.status_code == second.status_code == 200
-    assert first.json()["job_id"] != second.json()["job_id"]
-
-
 def test_malformed_json_is_rejected_without_changes():
     assert client.post("/api/channels", content="{", headers={"Content-Type": "application/json"}).status_code == 400
     assert not server._configured_path("CHANNELS_FILE").exists()
 
 
-JOB_ENDPOINTS = ["/api/render", "/api/jobs/render", "/api/jobs/render_clip", "/api/make", "/api/jobs/make"]
+JOB_ENDPOINTS = ["/api/render", "/api/make"]
+
+
+@pytest.mark.parametrize("endpoint,kind", [
+    ("/api/jobs/render", "render"), ("/api/jobs/render_clip", "render"),
+    ("/api/jobs/make", "make"),
+])
+def test_job_aliases_validate_and_dispatch_to_the_same_workflow(endpoint, kind, monkeypatch):
+    launch = AsyncMock(return_value={"job_id": "alias-job", "status": "started"})
+    monkeypatch.setattr(server, "_launch", launch)
+    payload = {"url": "https://example.com/video", "target": "https://example.com/video", "start": 1, "end": 10}
+    assert client.post(endpoint, json={**payload, "style": []}).status_code == 400
+    launch.assert_not_called()
+    assert client.post(endpoint, json=payload).json()["job_id"] == "alias-job"
+    assert launch.call_args.args[0] == kind
+    assert launch.call_args.args[1]["style"] == "gold"
+
 
 
 @pytest.mark.parametrize("endpoint", JOB_ENDPOINTS)

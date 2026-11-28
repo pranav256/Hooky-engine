@@ -38,12 +38,14 @@ def clip_id(source: str, start: float, end: float) -> str:
     return f"{source}_{round(start * 1000)}_{round(end * 1000)}"
 
 
-def atomic_json(path: Path, data: object) -> None:
+def atomic_json(path: Path, data: object, *, sort_keys: bool = False,
+                allow_nan: bool = True, indent: int | None = 2) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as output:
-            json.dump(data, output, indent=2, ensure_ascii=False)
+            json.dump(data, output, indent=indent, ensure_ascii=False,
+                      sort_keys=sort_keys, allow_nan=allow_nan)
             output.flush()
             os.fsync(output.fileno())
         Path(name).replace(path)

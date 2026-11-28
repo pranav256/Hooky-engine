@@ -63,7 +63,7 @@ from hooky.core.highlights import AUTO_MAX_CLIPS, AUTO_CANDIDATES_PER_CHUNK, AUT
 from hooky.core.lowspec import X264_PRESET, WHISPER_COMPUTE
 from hooky.config import SUB_STYLE, SUBTITLE_SOURCE, AUTO_CLIP_MODE
 from hooky.parts.cli import build_parser
-from hooky.parts.options import PartsOptions
+from hooky.options import PartsOptions
 from hooky.core.subtitles import build_ass
 args = build_parser().parse_args(["source.mp4"])
 parts = PartsOptions(mode=args.mode, target_seconds=args.part_seconds, background=args.background)

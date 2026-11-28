@@ -87,7 +87,6 @@ let channelsSaving = false;
 let cachedEnvConfig = { raw: "", values: {} };
 let isPlaying = false;
 let wordIdx = 0;
-let SCRIPT_WORDS = [];
 let captionTimer = null;
 let envFormBaseline = {};
 let envDraftOperations = [],
@@ -117,8 +116,7 @@ let envLoaded = false,
   envSaving = false,
   envDirty = false,
   envTab = "form",
-  envSwitching = false,
-  envRevision = 0;
+  envSwitching = false;
 let outputsLoading = false,
   doctorReady = false,
   onboardingDismissed = false;
@@ -314,7 +312,6 @@ document.addEventListener("DOMContentLoaded", () => {
       field.addEventListener("input", () => {
         envDirty = true;
         envEditorDirty = true;
-        envRevision++;
         setEnvStatus(
           "Unsaved settings. Save configuration to apply them to future jobs.",
           "unsaved",
@@ -1457,17 +1454,8 @@ async function renderSingleHookById(hookId) {
   }
   await startJob("render_clip", "/api/jobs/render_clip", {
     url,
-    start: Number(hook.start),
-    end: Number(hook.end),
-    style:
-      activeSubtitleMode === "auto" ? autoDetectedStyle : activeSubtitleMode,
-    framing:
-      activeFramingMode === "auto" ? autoDetectedFraming : activeFramingMode,
-    crop_x: hook.crop_x ?? cropX,
-    crop_y: hook.crop_y ?? cropY,
-    title: hook.title,
+    ...selectedClipPayload(hook),
     video_title: currentSourceVideoTitle,
-    ...(hook.caption_edits?.length ? { caption_edits: hook.caption_edits } : {}),
   });
 }
 async function triggerMakePipeline() {
@@ -1588,7 +1576,6 @@ async function loadEnvConfig(discard = false) {
   if (envLoading || envSaving || (envDirty && !discard)) return;
   if (discard) {
     envDirty = false;
-    envRevision++;
   }
   envLoading = true;
   setEnvStatus("Loading settings…", "loading");

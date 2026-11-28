@@ -12,7 +12,6 @@ import os
 import re
 import statistics
 import sys
-import tempfile
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -21,6 +20,7 @@ from urllib.parse import parse_qs, urlparse
 
 from ..config import (CHANNEL_BACKLOG_MAX, CHANNEL_SCAN_MAX, CHANNELS_FILE,
                       LINKS_FILE, OUTPUT_DIR)
+from .checkpoints import atomic_json
 from .downloader import yt_dlp_auth_opts
 
 SEEN_FILE = OUTPUT_DIR / "channel_history.json"
@@ -145,22 +145,6 @@ def _history_ids(history: dict) -> set[str]:
                if isinstance(item, dict)})
 
 
-def _atomic_json(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    name = None
-    try:
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
-                                         prefix=path.name + ".", delete=False) as output:
-            name = output.name
-            json.dump(data, output, indent=2, ensure_ascii=False, allow_nan=False)
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(name, path)
-    finally:
-        if name and os.path.exists(name):
-            os.unlink(name)
-
-
 @contextmanager
 def _file_lock(path: Path):
     """Serialize short discovery writes; release automatically on process exit."""
@@ -193,7 +177,7 @@ def _save_history(history: dict, path: Path | None = None) -> None:
             merged[video_id] = ({**old, **record}
                                 if isinstance(old, dict) and isinstance(record, dict)
                                 else record)
-        _atomic_json(path, merged)
+        atomic_json(path, merged, allow_nan=False)
 
 
 def _active_link_count(path: Path) -> int:
@@ -410,7 +394,7 @@ def _read_cache(url: str, scan: int) -> dict | None:
 
 def _write_cache(url: str, scan: int, data: dict) -> None:
     try:
-        _atomic_json(_cache_path(url, scan), data)
+        atomic_json(_cache_path(url, scan), data, allow_nan=False)
     except (OSError, ValueError, TypeError) as exc:
         print(f"[channels] cache not saved for {url}: {exc}", file=sys.stderr)
 

@@ -21,6 +21,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from .checkpoints import digest, file_revision, load_checkpoint, save_checkpoint
 from .lowspec import WHISPER_COMPUTE, WHISPER_MODEL, WHISPER_THREADS, lowspec_input_args
 
 _MODEL = None  # lazy singleton
@@ -108,17 +109,9 @@ STYLES: dict[str, dict] = {
 FONT_OVERRIDE = os.environ.get("SUB_FONT", "")
 
 
-def _font_size_override() -> int:
+def _positive_override(name: str) -> int:
     try:
-        val = int(os.environ.get("SUB_FONT_SIZE", 0))
-        return val if val > 0 else 0
-    except (ValueError, TypeError):
-        return 0
-
-
-def _max_words_override() -> int:
-    try:
-        val = int(os.environ.get("SUB_MAX_WORDS", 0))
+        val = int(os.environ.get(name, 0))
         return val if val > 0 else 0
     except (ValueError, TypeError):
         return 0
@@ -216,6 +209,49 @@ def _transcribe_selected(model, video_path: Path, timestamps: list[float],
                     if token and b > a:
                         words.append({"start": a, "end": b, "word": token})
     return words
+
+
+def words_to_captions(words: list[dict]) -> list[dict]:
+    """Group Whisper words into small sentence/phrase cues for Gemini."""
+    chunks, current = [], []
+    for word in sorted(words, key=lambda w: w["start"]):
+        if current and (word["start"] - current[-1]["end"] > 0.7
+                        or word["end"] - current[0]["start"] > 10):
+            chunks.append(current)
+            current = []
+        current.append(word)
+        if word["word"].rstrip().endswith((".", "?", "!")) or len(current) >= 20:
+            chunks.append(current)
+            current = []
+    if current:
+        chunks.append(current)
+    return [{"start": chunk[0]["start"], "end": chunk[-1]["end"],
+             "text": " ".join(w["word"] for w in chunk)} for chunk in chunks]
+
+
+def transcribe_source(video: Path, duration: float, cache_dir: Path,
+                      language: str | None = None) -> tuple[list[dict], list[dict]]:
+    """Decode five-minute windows one at a time, with independently reusable caches."""
+    words = []
+    start = 0.0
+    revision = file_revision(video)
+    while start < duration:
+        end = min(duration, start + 300)
+        signature = {"version": 1, "source": revision, "window": [start, end],
+                     "model": WHISPER_MODEL, "compute": WHISPER_COMPUTE, "language": language}
+        path = cache_dir / f"speech_{digest(signature)}.json"
+        selected = load_checkpoint(path, signature)
+        if not isinstance(selected, list):
+            selected = transcribe(video, language=language,
+                                  clip_timestamps=[max(0.0, start - 2), min(duration, end + 2)])
+            selected = [w for w in selected if start <= (w["start"] + w["end"]) / 2 < end]
+            save_checkpoint(path, signature, selected)
+        words.extend(selected)
+        start = end
+    words.sort(key=lambda word: word["start"])
+    if not words:
+        raise ValueError("No spoken evidence found. Supply a usable VTT/SRT caption track.")
+    return words_to_captions(words), words
 
 
 def _ass_time(seconds: float) -> str:
@@ -373,11 +409,11 @@ def build_ass(words: list[dict], clip_start: float, clip_end: float,
     style = STYLES.get(style_name, STYLES["hormozi"]).copy()
     font = FONT_OVERRIDE or style["font"]
 
-    font_override = _font_size_override()
+    font_override = _positive_override("SUB_FONT_SIZE")
     if font_override:
         style["font_size"] = font_override
 
-    words_override = _max_words_override()
+    words_override = _positive_override("SUB_MAX_WORDS")
     if words_override:
         style["max_words"] = words_override
 

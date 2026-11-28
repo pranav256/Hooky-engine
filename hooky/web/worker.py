@@ -41,16 +41,7 @@ async def run(request: dict) -> int:
             job.update(status="completed", output_file=outputs[0], output_files=outputs)
         elif job["type"] in {"render_clip", "draft"}:
             from hooky.web.rendering import render_clip
-            render_payload = {**payload}
-            source = payload["url"]
-            if source.startswith("local:"):
-                from hooky.web.sources import local_source
-                from hooky.web.analyzer import prepare_source
-                metadata, cues = await prepare_source(source, cache, job)
-                render_payload["source_duration"] = metadata["duration"]
-            else:
-                cues = None
-            output = await render_clip(render_payload, job, cache, cues)
+            output = await render_clip(payload, job, cache)
             if job["type"] == "draft":
                 job.update(status="completed", result={"draft_url": f"/api/jobs/{job['id']}/draft"})
             else:

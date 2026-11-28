@@ -157,8 +157,9 @@ def _runtime_settings() -> dict[str, str]:
     return values
 
 
-def _configured_path(key: str) -> Path:
-    raw = _runtime_settings().get(key, "").strip()
+def _configured_path(key: str, settings: dict[str, str] | None = None) -> Path:
+    values = _runtime_settings() if settings is None else settings
+    raw = values.get(key, "").strip()
     if not raw:
         return PROJECT_ROOT / {"OUTPUT_DIR": "output", "CHANNELS_FILE": "channels.txt", "LINKS_FILE": "links.txt"}[key]
     path = Path(raw)
@@ -174,12 +175,12 @@ def _job_response(job: dict) -> dict:
     return result
 
 
-async def _launch(kind: str, payload: dict) -> dict:
+async def _launch(kind: str, payload: dict, settings: dict[str, str] | None = None) -> dict:
     try:
-        environment = _runtime_settings()
+        environment = _runtime_settings() if settings is None else settings.copy()
         # Preserve test/deployment configured paths even when no file override exists.
         for key in ("OUTPUT_DIR", "CHANNELS_FILE", "LINKS_FILE"):
-            environment[key] = str(_configured_path(key))
+            environment[key] = str(_configured_path(key, environment))
         environment["HOOKY_LOCAL_SOURCE_DIR"] = str(_job_manager().directory.parent / "web_sources")
         job = await _job_manager().start(kind, payload, environment, PROJECT_ROOT)
     except ValueError as exc:
@@ -245,8 +246,9 @@ def _request_text(data: dict[str, Any], field: str, default: str = "") -> str:
     return value.strip()
 
 
-def _render_options(data: dict[str, Any]) -> tuple[str, str]:
-    style = _request_text(data, "style", (_runtime_settings().get("SUB_STYLE") or "").strip() or "gold").lower()
+def _render_options(data: dict[str, Any], settings: dict[str, str] | None = None) -> tuple[str, str]:
+    values = _runtime_settings() if settings is None else settings
+    style = _request_text(data, "style", (values.get("SUB_STYLE") or "").strip() or "gold").lower()
     framing = _request_text(data, "framing", "center").lower()
     if style not in STYLES:
         raise HTTPException(status_code=400, detail="Unknown subtitle style.")
@@ -610,7 +612,7 @@ async def delete_source(source_id: str):
     return {"status": "deleted"}
 
 
-def _clip_payload(data: dict) -> dict:
+def _clip_payload(data: dict, settings: dict[str, str] | None = None) -> dict:
     url = _video_url(data)
     try:
         if isinstance(data.get("start"), bool) or isinstance(data.get("end"), bool):
@@ -620,7 +622,7 @@ def _clip_payload(data: dict) -> dict:
         raise HTTPException(status_code=400, detail="Start and end timestamps must be numeric.") from None
     if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end <= start:
         raise HTTPException(status_code=400, detail="Start must be >= 0 and end must be greater than start.")
-    style, framing = _render_options(data)
+    style, framing = _render_options(data, settings)
     title = _request_text(data, "title", "Hooky Reel")
     video_title, source_title = _request_text(data, "video_title"), _request_text(data, "source_title")
     payload = {"url": url, "start": start, "end": end, "style": style, "framing": framing,
@@ -645,8 +647,9 @@ async def render_selected_clips(request: Request):
     clips = data.get("clips")
     if not isinstance(clips, list) or not 1 <= len(clips) <= 100 or any(not isinstance(clip, dict) for clip in clips):
         raise HTTPException(status_code=400, detail="Select 1–100 clips to export.")
-    payloads = [_clip_payload({**data, **clip, "url": data.get("url")}) for clip in clips]
-    return await _launch("batch", {"url": payloads[0]["url"], "clips": payloads, "title": "Selected clips"})
+    settings = _runtime_settings()
+    payloads = [_clip_payload({**data, **clip, "url": data.get("url")}, settings) for clip in clips]
+    return await _launch("batch", {"url": payloads[0]["url"], "clips": payloads, "title": "Selected clips"}, settings)
 
 
 @app.post("/api/jobs/draft")

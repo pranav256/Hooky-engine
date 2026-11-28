@@ -3,10 +3,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ..quality import QUALITY_PRESETS
 from .profiler import SystemProfile
 
 PROFILE_NAMES = ("adaptive", "balanced", "quality", "low")
-QUALITY_NAMES = ("highest", "high", "low")
+QUALITY_NAMES = tuple(QUALITY_PRESETS)
 WHISPER_MODELS = ("tiny", "base", "small")
 WHISPER_COMPUTE_TYPES = ("int8", "float16", "float32")
 SUBTITLE_SOURCES = ("auto", "source", "whisper")
@@ -40,41 +41,32 @@ MANAGED_KEYS = (
 )
 
 
-def _ram_gb(profile: SystemProfile) -> float:
-    return profile.ram_gb or 0.0
-
-
 def quality_defaults(quality: str) -> dict[str, str]:
     """Return source and encoder settings for an explicit quality tier."""
-    values = {
-        "highest": ("1440", "2160", "medium"),
-        "high": ("1080", "1440", "medium"),
-        "low": ("720", "1080", "veryfast"),
-    }
     try:
-        long_height, short_height, preset = values[quality]
+        preset = QUALITY_PRESETS[quality]
     except KeyError as exc:
         raise ValueError(f"Unknown quality tier: {quality}") from exc
     return {
         "QUALITY": quality,
-        "SOURCE_MAX_HEIGHT_LONG": long_height,
-        "SOURCE_MAX_HEIGHT_SHORT": short_height,
-        "X264_PRESET": preset,
+        "SOURCE_MAX_HEIGHT_LONG": preset.source_max_height_long,
+        "SOURCE_MAX_HEIGHT_SHORT": preset.source_max_height_short,
+        "X264_PRESET": preset.x264_preset,
     }
 
 
 def recommended_profile(profile: SystemProfile) -> dict[str, str]:
     """Choose CPU/RAM-safe defaults while keeping the profile name adaptive."""
-    ram = _ram_gb(profile)
+    ram = profile.ram_gb or 0.0
     threads = profile.cpu_threads
     if ram and ram < 4.0 or threads <= 2:
-        quality, model, workers, preset = "low", "tiny", min(2, threads), "veryfast"
+        quality, model, workers = "low", "tiny", min(2, threads)
     elif ram and ram < 8.0 or threads <= 4:
-        quality, model, workers, preset = "high", "tiny", min(4, threads), "medium"
+        quality, model, workers = "high", "tiny", min(4, threads)
     elif ram >= 16.0 and threads >= 8:
-        quality, model, workers, preset = "highest", "small", min(8, threads), "medium"
+        quality, model, workers = "highest", "small", min(8, threads)
     else:
-        quality, model, workers, preset = "highest", "base", min(8, threads), "medium"
+        quality, model, workers = "highest", "base", min(8, threads)
 
     values = {
         "HOOKY_PROFILE": "adaptive",
@@ -85,8 +77,6 @@ def recommended_profile(profile: SystemProfile) -> dict[str, str]:
         "FFMPEG_THREADS": str(workers),
     }
     values.update(quality_defaults(quality))
-    # Keep the machine-specific preset selected above for adaptive mode.
-    values["X264_PRESET"] = preset
     return values
 
 
@@ -96,36 +86,18 @@ def profile_defaults(profile: SystemProfile, name: str) -> dict[str, str]:
     if name == "adaptive":
         return adaptive
     if name == "low":
-        values = dict(adaptive)
-        values.update(quality_defaults("low"))
-        values.update({
-            "HOOKY_PROFILE": "low", "QUALITY": "low", "WHISPER_MODEL": "tiny",
-            "WHISPER_COMPUTE": "int8", "WHISPER_THREADS": str(min(2, profile.cpu_threads)),
-            "FFMPEG_THREADS": str(min(2, profile.cpu_threads)),
-        })
-        return values
-    if name == "balanced":
-        workers = min(4, profile.cpu_threads)
-        values = dict(adaptive)
-        values.update(quality_defaults("high"))
-        values.update({
-            "HOOKY_PROFILE": "balanced", "QUALITY": "high", "WHISPER_MODEL": "tiny",
-            "WHISPER_COMPUTE": "int8", "WHISPER_THREADS": str(workers),
-            "FFMPEG_THREADS": str(workers),
-        })
-        return values
-    if name == "quality":
-        workers = min(8, profile.cpu_threads)
-        model = "small" if (_ram_gb(profile) >= 16 and profile.cpu_threads >= 8) else "base"
-        values = dict(adaptive)
-        values.update(quality_defaults("highest"))
-        values.update({
-            "HOOKY_PROFILE": "quality", "QUALITY": "highest", "WHISPER_MODEL": model,
-            "WHISPER_COMPUTE": "int8", "WHISPER_THREADS": str(workers),
-            "FFMPEG_THREADS": str(workers),
-        })
-        return values
-    raise ValueError(f"Unknown Hooky profile: {name}")
+        quality, model, worker_limit = "low", "tiny", 2
+    elif name == "balanced":
+        quality, model, worker_limit = "high", "tiny", 4
+    elif name == "quality":
+        quality, worker_limit = "highest", 8
+        model = "small" if ((profile.ram_gb or 0) >= 16 and profile.cpu_threads >= 8) else "base"
+    else:
+        raise ValueError(f"Unknown Hooky profile: {name}")
+    workers = str(min(worker_limit, profile.cpu_threads))
+    return {**adaptive, **quality_defaults(quality),
+            "HOOKY_PROFILE": name, "WHISPER_MODEL": model,
+            "WHISPER_THREADS": workers, "FFMPEG_THREADS": workers}
 
 
 def default_settings(project_root: Path, profile: SystemProfile) -> dict[str, str]:

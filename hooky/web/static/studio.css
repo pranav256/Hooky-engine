@@ -703,9 +703,6 @@ textarea:focus {
   .studio-workbench {
     gap: 2rem;
   }
-  .workspace-heading h1 {
-    font-size: 3.125rem;
-  }
   .studio-overrides {
     flex-direction: row !important;
     align-items: center;
@@ -898,7 +895,6 @@ textarea:focus {
     display: block;
   }
   .workspace-heading h1 {
-    font-size: 2.625rem;
     letter-spacing: -0.125rem;
     margin-top: 0.75rem;
   }

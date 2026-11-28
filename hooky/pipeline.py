@@ -15,7 +15,7 @@ from .core.cutter import cut_all_clips
 from .core.highlights import (AUTO_CANDIDATES_PER_CHUNK, AUTO_MAX_CLIPS,
                               find_highlights, plan_auto_clips, snap_clip_boundaries)
 from .core.lowspec import WHISPER_MODEL, WHISPER_COMPUTE
-from .core.profiling import PipelineProfile
+from .core.logbook import PipelineProfile
 from .core.queue import QueueFullError, enqueue_clips
 from .core.source_text import caption_words, load_caption_file, sidecar_caption_file
 from .core.subtitles import transcribe
@@ -41,16 +41,6 @@ class Pipeline:
                       "generate_captions": generate_captions,
                       "cut_all_clips": cut_all_clips}
 
-    @staticmethod
-    def _load_words_cache(path: Path) -> list[dict] | None:
-        # Reading an explicitly supplied old word cache remains supported.
-        # The pipeline itself uses versioned selected-window checkpoints.
-        try:
-            words = json.loads(path.read_text(encoding="utf-8"))
-            return words if isinstance(words, list) and words else None
-        except (OSError, ValueError):
-            return None
-
     def transcribe_windows(self, video: Path, clips: list[dict],
                            cache_path: Path | None = None,
                            duration: float | None = None) -> list[dict]:
@@ -69,9 +59,9 @@ class Pipeline:
                 windows[-1][1] = max(end, windows[-1][1])
             else:
                 windows.append([start, end])
-        signature = {"version": 2, "source": file_revision(video), "windows": windows,
-                     "model": WHISPER_MODEL, "compute": WHISPER_COMPUTE,
-                     "language": self.options.sub_lang}
+        speech_signature = {"source": file_revision(video), "model": WHISPER_MODEL,
+                            "compute": WHISPER_COMPUTE, "language": self.options.sub_lang}
+        signature = {"version": 2, **speech_signature, "windows": windows}
         words = load_checkpoint(cache_path, signature) if cache_path else None
         if isinstance(words, list) and words:
             return words
@@ -83,10 +73,7 @@ class Pipeline:
         missing: list[list[float]] = []
         paths: dict[tuple[float, float], Path] = {}
         for window in windows:
-            window_signature = {"version": 1, "source": file_revision(video),
-                                "window": window, "model": WHISPER_MODEL,
-                                "compute": WHISPER_COMPUTE,
-                                "language": self.options.sub_lang}
+            window_signature = {"version": 1, **speech_signature, "window": window}
             window_path = None
             if cache_path:
                 window_path = cache_path.with_name(
@@ -113,10 +100,7 @@ class Pipeline:
                 cached_words.extend(selected)
                 window_path = paths.get((start, end))
                 if window_path:
-                    window_signature = {"version": 1, "source": file_revision(video),
-                                        "window": window, "model": WHISPER_MODEL,
-                                        "compute": WHISPER_COMPUTE,
-                                        "language": self.options.sub_lang}
+                    window_signature = {"version": 1, **speech_signature, "window": window}
                     save_checkpoint(window_path, window_signature, selected)
 
         words = sorted(cached_words, key=lambda word: float(word.get("start", 0)))
@@ -256,13 +240,14 @@ class Pipeline:
                  if isinstance(item, dict) and item.get("clip_id")}
         delivered = {identity for identity, item in items.items()
                      if queued and item.get("delivered")}
+        order = {c["clip_id"]: i for i, c in enumerate(clips, 1)}
         if queued:
             # A confirmed post may have already removed the rendered MP4.
             # Stable IDs, rather than file existence, acknowledge that work.
             for bucket in ("pending", "posted", "in_flight", "failed"):
                 for path, entry in queue_state.get(bucket, {}).items():
                     identity = entry.get("clip_id")
-                    if identity and any(c["clip_id"] == identity for c in clips):
+                    if identity in order:
                         delivered.add(identity)
                         items.setdefault(identity, {"clip_id": identity, "path": path,
                                                     "caption": entry.get("caption", ""),
@@ -305,7 +290,6 @@ class Pipeline:
         if len(results) != len(batch):
             raise RuntimeError("Renderer returned incomplete results; source remains unprocessed")
         job = Job(video=video, manifest=manifest)
-        order = {c["clip_id"]: i for i, c in enumerate(clips, 1)}
         for result, caption, selected in zip(results, meta, batch):
             path = Path(result["path"])
             if not o.no_subs and not result.get("subtitled"):

@@ -1,86 +1,42 @@
-# Hooky — AI Video Clipper & Shorts Generator
+<p align="center">
+  <img src="hooky/web/static/favicon.svg" width="64" height="64" alt="Hooky logo">
+</p>
+
+<h1 align="center">Hooky</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12-blue?logo=python&logoColor=white" alt="Python Versions">
-  <img src="https://img.shields.io/badge/AI-Google%20Gemini%202.0-8E75B2?logo=google&logoColor=white" alt="Gemini AI">
-  <img src="https://img.shields.io/badge/Subtitles-Faster--Whisper-orange" alt="Faster Whisper">
-  <img src="https://img.shields.io/badge/Engine-FFmpeg%209%3A16-red?logo=ffmpeg&logoColor=white" alt="FFmpeg">
-  <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey" alt="Platform">
-  <img src="https://img.shields.io/badge/Tests-260%20passing-brightgreen" alt="Tests">
-  <img src="https://img.shields.io/badge/License-MIT-green" alt="License">
+  <strong>Find the good parts. Make them shorts.</strong><br>
+  AI-assisted video clipping, animated captions, and a local Studio for the final cut.
 </p>
 
 <p align="center">
-  CLI tool and local web studio for extracting vertical 9:16 clips from long-form video with synchronized subtitle animation.
+  <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10 and newer">
+  <img src="https://img.shields.io/badge/AI-Google%20Gemini-8E75B2" alt="Google Gemini analysis">
+  <img src="https://img.shields.io/badge/Video-FFmpeg-007808?logo=ffmpeg&logoColor=white" alt="FFmpeg video rendering">
+  <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT license">
 </p>
 
----
+<p align="center">
+  <a href="#quick-start">Quick start</a> &middot;
+  <a href="#your-first-clip">Your first clip</a> &middot;
+  <a href="https://hoooky.vercel.app/docs">Documentation</a>
+</p>
 
-## 🌟 Why Hooky?
+![Hooky Studio with source input, moment selection, and a portrait preview](docs/images/engine_studio.png)
 
-Hooky provides automated clipping, transcription, and subtitle styling for vertical video production.
+Bring a podcast, interview, lesson, or local video. Hooky helps you find a moment, tighten the timing, frame it for a phone, and export a captioned 9:16 MP4. Use the browser when you want to edit each clip, or the CLI when you have a batch ready to go.
 
-* **Highlight Detection**: Uses Google Gemini to analyze transcripts, detect narrative hooks, and pick high-retention moments (not just audio peaks).
-* **Animated Captions**: Powered by `faster-whisper` and source captions with karaoke-style highlight words, custom fonts, and multiple preset styles (`hormozi`, `clean`, `yellow`).
-* **Channel Monitor**: Simply drop channel handles in `channels.txt` — Hooky discovers high-performing winners based on view count and feeds them directly to the render pipeline.
-* **Scheduled Publishing**: Built-in scheduler with safe pacing, cooldown jitter, upload checkpoints, and duplicate prevention to protect account health.
-* **File-Based Configuration**: Zero SQL or heavy docker setup. Driven cleanly by two text files (`channels.txt` and `links.txt`).
-* **Hardware Acceleration**: Leverages GPU acceleration (CUDA) and multi-threaded FFmpeg presets with automatic memory/CPU profiling.
+- **Find a starting point.** Ask Gemini for narrative hooks or search the transcript for a topic such as `startup mistakes`.
+- **Make the cut yours.** Adjust boundaries, move the portrait crop, correct captions, and render a quick draft before the final export.
+- **Keep a series moving.** Discover videos from channel lists, process saved links, or turn a longer story into numbered parts.
+- **Pick the caption mood.** Bold word highlights, a quieter subtitle line, or a serif treatment; choose a preset and preview it.
+- **Come back later.** Save Studio projects and resume supported CLI workflows from checkpoints.
 
----
+Studio, transcription, and rendering run on your machine. Gemini analysis uses Google's API with your key. Hook suggestions are editorial starting points; review the source dialogue and final clip before sharing.
 
-## 🔄 How It Works
+## Quick start
 
-```text
-  ┌──────────────────────────────────────────────────────────────┐
-  │ 1. SOURCE DISCOVERY                                          │
-  │    channels.txt ──> Discover top-viewed YouTube videos        │
-  │    links.txt    ──> Direct YouTube URLs or local MP4 files    │
-  └───────────────────────────────┬──────────────────────────────┘
-                                  │
-                                  ▼
-  ┌──────────────────────────────────────────────────────────────┐
-  │ 2. AI INTELLIGENCE & HOOK EXTRACTION                         │
-  │    Google Gemini 2.0 ──> Identifies punchy, high-retention  │
-  │                          viral clips (15s - 60s)             │
-  └───────────────────────────────┬──────────────────────────────┘
-                                  │
-                                  ▼
-  ┌──────────────────────────────────────────────────────────────┐
-  │ 3. TRANSCRIPTION & ANIMATED SUBTITLES                        │
-  │    faster-whisper ──> Word-level timing & animated styling    │
-  │                       (Hormozi, Clean, Yellow presets)       │
-  └───────────────────────────────┬──────────────────────────────┘
-                                  │
-                                  ▼
-  ┌──────────────────────────────────────────────────────────────┐
-  │ 4. 9:16 VERTICAL FFmpeg ENCODING                             │
-  │    Center-crop, 1080x1920 HD, burned subtitles, covers       │
-  └───────────────────────────────┬──────────────────────────────┘
-                                  │
-                                  ▼
-  ┌──────────────────────────────────────────────────────────────┐
-  │ 5. QUEUE & AUTOMATED PUBLISHING                              │
-  │    Safe rate-limited Instagram Reels queue with jitter       │
-  └──────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 🚀 Quick Start
-
-### Prerequisites
-- Python 3.10 or higher
-- [uv](https://github.com/astral-sh/uv) (fastest Python package manager; automatically installed by setup if missing)
-- Google Gemini API Key ([get a free key here](https://aistudio.google.com/app/apikey))
-
-### Linux & macOS
-
-```bash
-git clone https://github.com/pranav256/Hooky-engine.git
-cd Hooky-engine
-./main.sh
-```
+Have Git, Python 3.10 or newer, and a [Gemini API key](https://aistudio.google.com/app/apikey) ready. On first run, the platform launcher creates the Python environment with [uv](https://github.com/astral-sh/uv). It can install FFmpeg/FFprobe through your system package manager. System installation may need administrator access; macOS needs Homebrew.
 
 ### Windows (PowerShell)
 
@@ -91,215 +47,203 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\main.ps1
 ```
 
-> **⚡ Single-Command Magic:** Running `main.ps1` (or `./main.sh` / `python main.py`) automatically verifies FFmpeg & `uv`, syncs locked dependencies, initializes `.env`, and launches the visual Web Studio, immediately opening your browser to `http://127.0.0.1:8000`!
+### Linux & macOS
 
----
+```bash
+git clone https://github.com/pranav256/Hooky-engine.git
+cd Hooky-engine
+./main.sh
+```
 
-## 🖥️ Web Studio & Interactive Portal
+Follow the setup prompt to add your key. The launcher creates `.env` from the example when needed, then opens Studio at **http://127.0.0.1:8000**. On later runs, use the same launcher.
 
-Hooky includes a built-in visual Web Studio and control portal running locally at `http://127.0.0.1:8000`:
+Need to revisit setup? Run `./main.sh setup` or `.\main.ps1 setup`. Run `doctor` to check local tools; it reports a missing key separately and does not make a live Gemini call. After setup, `python main.py` is another way to open Studio.
 
-<p align="center">
-  <img src="docs/images/engine_studio.png" alt="Hooky Web Studio Interface" width="100%">
-</p>
+> **Launcher vs. installed command:** The launchers open Studio with no arguments. The installed `hooky` command with no arguments processes pending entries from `links.txt`; use `hooky web` to open Studio explicitly.
 
-<p align="center">
-  <img src="docs/images/engine_settings.png" alt="Hooky Settings Editor" width="49.5%">
-  <img src="docs/images/engine_radar.png" alt="Hooky Channel Radar" width="49.5%">
-</p>
+## Your first clip
 
-* **AI Hook Candidate Inspector**: Inspect suggested moments with source dialogue, ordinal recommendations, selection methods, and boundary timecodes. These suggestions are editorial heuristics, not predicted audience retention.
-* **Dual-Mode Visual Simulator**: Switch between the original horizontal video and the 9:16 vertical crop preview.
-* **Framing & Subtitles**: Choose a centered portrait crop or fit the full source on an ambient blurred canvas; analysis suggests a mode from source dialogue/title.
-* **Channel Radar & `.env` Management**: Monitor creator channels in `channels.txt` and fine-tune runtime environment variables directly in your browser.
+1. **Bring a source.** Paste a YouTube URL or upload a local video in Studio.
+2. **Find a moment.** Choose **Detect hooks**. Add an optional **Clip topic** to look for a particular conversation.
+3. **Shape the clip.** Select a moment, check its dialogue and start/end times, then choose a portrait crop or the full picture on a blurred canvas.
+4. **Give it a voice on screen.** Pick a caption style and use **Edit captions** to correct individual phrases. **Quick preview** makes a short, low-resolution draft.
+5. **Export.** Render one moment or choose **Export selected** for several. Pick up finished MP4s in **Output Gallery** or your configured output folder.
 
----
+Source captions supply subtitle timing when available; Whisper transcription is the fallback. Topic search belongs to **Detect hooks**, not **Run pipeline**. If Gemini is unavailable during topic search, word-matching results are labeled; no matches produce an empty result.
 
-## ⚡ Workflow in 2 Minutes
+### Keep the edit
 
-After installation, run `./main.sh doctor` (Windows: `.\main.ps1 doctor`). Doctor checks local tools and reports a missing API key separately; it does not call Gemini automatically. Run `./main.sh setup` / `.\main.ps1 setup` to configure the key, then `./main.sh web` / `.\main.ps1 web`.
+Use **Save project** to keep the source, moments, timing, crop positions, caption corrections, topic, and framing choices. **Save project** updates the open project; **Save as new** keeps a separate copy. Reopen a project to continue without another Gemini analysis.
 
-In Studio, paste a source URL, detect hooks, select a moment, check its start/end and framing, and export. Retrieve the finished file from Output Gallery. Source captions provide subtitle timing; audio transcription is the fallback when a usable track is unavailable. URL make ranks speech scenes locally, while Detect Hooks also asks Gemini for narrative selection.
+Projects are explicit saves. Browser-session recovery does not update them automatically. Keep the original source available: a project stores edits and source references, not a copy of the media.
 
-Studio can also analyze a local video uploaded in the browser (up to 2 GiB); uploads are stored under `STATE_DIR/web_sources`, checked with FFprobe, and removed with **Forget local video** after deleting projects that reference them. This is local disk storage, not a backup. Drag the portrait preview or use the crop controls to reframe each moment. Select multiple moments and choose **Export selected** to render them together; finished clips remain available if another clip fails, and retry targets unfinished clips. **Quick preview** renders a short, low-resolution draft before the full export.
+<details>
+<summary>More of the workspace: settings and channel radar</summary>
 
-Studio starts at most two workers at once. Cancel stops that worker's download/encoding process tree. Jobs survive page reload in history; after a server restart unfinished jobs are marked interrupted and require an explicit new start. Saved settings apply to new jobs; active jobs keep their starting settings. Studio file values take precedence over the inherited process environment. Removing a file setting restores the inherited value or built-in default. Source/output path changes apply immediately; token and history/session storage changes require a restart. Previously completed jobs retain access to their recorded output directory.
+![Hooky settings editor](docs/images/engine_settings.png)
 
-Studio keeps the newest 100 terminal jobs and 200 bounded log lines per job. Disposable Studio caches are cleaned after seven days or above 1 GiB, when no worker is using them. Completed exports and CLI manifests/checkpoints stay outside this cleanup.
+![Hooky channel radar](docs/images/engine_radar.png)
 
-Studio reuses prepared video details and transcripts across analysis and export jobs for up to 24 hours. Source URL, caption/transcription language, subtitle source, Whisper model/compute mode, and download authentication settings separate cache entries. Empty or damaged entries are recomputed. Metadata and caption requests run together on a cache miss; unchanged worker status no longer triggers repeated history writes. Encoding quality and exact clip boundaries are preserved. See [performance findings and feature priorities](docs/performance-and-features.md).
+Edit runtime settings in the browser and manage the channels that feed your next batch.
 
-To find specific spoken content, enter an optional **Clip topic** (for example, `startup mistakes`) and choose **Detect hooks**. Hooky reads the full transcript in bounded chunks, shows the matching source dialogue and reasons, and returns up to four non-overlapping clips. If Gemini is unavailable, it labels word-matching results; no matches produce a clear empty state. Leave the topic blank for the existing general analysis. Topic search applies to Detect hooks, not Run pipeline.
+</details>
 
-Select a moment to **Edit captions**. Search within its phrases, correct text, or reset to the original. Edits update the caption simulator and the exported subtitles, and are restored with the current Studio session in this browser. Export snapshots its edits when it starts. Original source transcripts stay unchanged. A changed source caption track can invalidate an old edit; analyze again before exporting.
+## Batch workflows
 
-Use **Projects** to keep an analyzed source for later. Enter a name and choose **Save project** to save all its moments, selected clip, timing, crop positions, caption corrections, topic and framing/subtitle choices. **Save project** updates the opened project and its name; **Save as new** keeps a separate copy. Choose a saved project and **Open project** to reopen its moments without another Gemini analysis. Delete projects you no longer need so their local source can be forgotten. Unsaved changes prompt before opening another project or starting a new analysis. Saves are explicit; browser-session restoration does not automatically update the project on disk.
+**One video, a few clips:**
 
-Projects are versioned JSON files under `STATE_DIR/web_projects` (by default `.hooky-state/web_projects`). They survive browser changes, restarts and job-history cleanup. Reload Studio to refresh the list after saving from another browser. Stale saves are rejected so another tab's work stays intact; **Save as new** preserves your version. Project files include transcripts and source URLs, but do not copy the source media or provide cloud sync. Export still needs an available source and valid caption timing. Each snapshot is limited to 1 MiB, 100 moments and 200 caption phrases per moment.
+```bash
+./main.sh make interview.mp4 --clips 3
+```
 
-### 1. Feed Channels or Links
+**A list of sources:** add YouTube URLs or local paths to `links.txt`, one per line. Options after `|` apply to that source.
 
-Add YouTube handles to `channels.txt`:
+```text
+https://www.youtube.com/watch?v=VIDEO_ID | clips=auto | style=hormozi
+/path/to/podcast.mp4 | clips=5 | min=20 max=50 | style=yellow
+```
+
+**A channel to watch:** add handles or channel URLs to `channels.txt`. Discovery can filter by view count and limit the sources it adds.
+
 ```text
 @hubermanlab | limit=3 | min_views=250000
 https://www.youtube.com/@TheDiaryOfACEO | limit=2 | scan=20
 ```
 
-Or add specific video URLs / local files to `links.txt`:
-```text
-https://www.youtube.com/watch?v=dQw4w9WgXcQ | clips=auto | style=hormozi
-/path/to/podcast.mp4 | clips=5 | min=20 max=50 | style=yellow
+```bash
+./main.sh preview   # Inspect pending work
+./main.sh make      # Discover sources and render clips; does not post
+./main.sh open      # Open the output folder
 ```
 
-### 2. Run the Pipeline or Web Studio
+On Windows, replace `./main.sh` with `.\main.ps1` in these examples.
+
+### Turn a story into a series
 
 ```bash
-# Launch the visual Web Studio & Control Portal in your browser (http://127.0.0.1:8000)
-./main.sh web
+# Condense the story into chronological parts, with optional part labels
+./main.sh parts interview.mp4 --part-seconds 60 --labels
 
-# Or run terminal automation:
-./main.sh make
+# Select funny moments and export with numeric overlays only
+./main.sh number-parts cartoon.mp4
 ```
+
+Parts preserve source order and export without queuing to Instagram. Story mode uses spoken evidence; number-only mode skips Whisper and subtitles but still uses Gemini. See the [parts guide](hooky/parts/README.md) for options, outputs, and recovery.
+
+### Commands at a glance
+
+| Command | Use it to |
+| --- | --- |
+| `./main.sh web` | Open the local Studio |
+| `./main.sh make` | Scan channels, add sources to `links.txt`, and render a batch |
+| `./main.sh preview` | Inspect pending work without downloading or rendering |
+| `./main.sh status` | See sources, runtime settings, queue, and output |
+| `./main.sh retry` | Retry failed source-processing entries |
+| `./main.sh open` | Open your output folder |
+| `./main.sh parts <file>` | Export a chronological series of vertical parts |
+| `./main.sh styles` | List caption presets |
+| `./main.sh setup` | Configure the machine and API key |
+| `./main.sh doctor` | Check local tools and configuration |
+| `./main.sh doctor youtube <URL>` | Check cookies and probe a specific YouTube source |
+| `./main.sh post` | Post queued clips now, with configured gaps between uploads |
+| `./main.sh cleanup` | Preview removable artifacts; deletion requires `--apply` |
+
+Instagram publishing is optional. Configure its credentials only if you use it. Scheduled posting uses `POST_HOURS`; the `post` command starts posting immediately. Upload checkpoints and duplicate checks support recovery after interruption.
+
+## Caption styles
+
+Choose the look that fits the footage. Presets use word timing, outlines, and highlights to keep speech readable.
+
+| Preset | Look | Font |
+| --- | --- | --- |
+| `hormozi` | Bold uppercase phrases with yellow word highlights | Montserrat |
+| `clean` | Smaller white text with a soft amber highlight | Arial |
+| `yellow` | Bright yellow highlights with a black outline | Montserrat |
+| `titanium` / `gold` | Warm champagne highlights and uppercase text | Montserrat |
+| `minimal` | A quieter serif line with a subtle shadow | Georgia |
+| `emerald` | Uppercase text with an emerald highlight | Consolas |
+| `crimson` | Bold text with a ruby highlight | Montserrat |
+
+Set `SUB_STYLE` in `.env`, pass `--sub-style`, or choose a style in Studio. `SUB_FONT` overrides the font; availability on your machine affects the rendered result.
+
+## Configuration
+
+The setup wizard writes `.env`. The posting queue is the list of clips waiting to upload. Use Studio settings or edit the file directly; [.env.example](.env.example) lists the available options.
+
+| Setting | What it controls |
+| --- | --- |
+| `GEMINI_API_KEY` | Your key for AI selection and analysis |
+| `QUALITY` | Encoding/download profile: `highest`, `high`, or `low` |
+| `X264_PRESET`, `FFMPEG_THREADS` | Encoding speed and CPU use |
+| `WHISPER_MODEL`, `WHISPER_COMPUTE` | Local speech transcription; defaults are `tiny` and `int8` on CPU |
+| `SUB_STYLE`, `SUB_LANG`, `SUBTITLE_SOURCE` | Caption appearance, language, and timing source |
+| `OUTPUT_DIR`, `STATE_DIR` | Exports and persistent runtime state |
+| `CHANNEL_BACKLOG_MAX`, `CHANNEL_SCAN_MAX` | Discovery budget and scan depth |
+| `YTDLP_COOKIES_FROM_BROWSER` / `YTDLP_COOKIES_FILE` | Optional YouTube authentication; configure one method |
+| `IG_USERNAME`, `IG_PASSWORD` | Optional Instagram login |
+| `QUEUE_MIN_GAP_MINUTES`, `QUEUE_MAX_GAP_MINUTES`, `POST_HOURS` | Posting gaps and scheduled posting window |
+
+Saved Studio settings apply to new jobs; running jobs keep their starting values. File values take precedence over inherited environment values. Removing a file setting restores the inherited value or built-in default. Source/output path changes apply immediately; changes to the Studio access key or saved browser/history locations require a restart. Completed jobs retain their recorded output directory.
+
+## Studio reference
+
+<details>
+<summary>Local uploads, captions, and saved projects</summary>
+
+- Local uploads are limited to 2 GiB, checked with FFprobe, and stored under `STATE_DIR/web_sources`. Delete referencing projects before choosing **Forget local video**. This storage is not a backup.
+- Caption corrections update the simulator and exported subtitles, leaving the original transcript unchanged. Export snapshots the edits when it starts. A changed source caption track can invalidate an edit; analyze again before export.
+- Projects are versioned JSON under `STATE_DIR/web_projects` (default `.hooky-state/web_projects`) and survive browser changes, restarts, and job-history cleanup. Reload Studio to refresh saves from another browser.
+- Stale saves are rejected to protect another tab's work. Use **Save as new** to preserve your version. Unsaved changes prompt before opening another project or analyzing a new source.
+- Projects contain transcripts and source URLs, without cloud sync or copied media. Each snapshot allows up to 1 MiB, 100 moments, and 200 caption phrases per moment. Export needs an available source and valid caption timing.
+
+</details>
+
+<details>
+<summary>Jobs, cancellation, and storage cleanup</summary>
+
+- Studio runs at most two workers. Cancel stops the worker's download/encoding process tree.
+- Job history survives page reloads. After a server restart, unfinished jobs are marked interrupted and need an explicit new start.
+- Finished clips remain available when another clip in a batch fails; retry targets unfinished clips.
+- History keeps the newest 100 terminal jobs and 200 bounded log lines per job.
+- Disposable caches are cleaned after seven days or above 1 GiB when no worker uses them. Completed exports and CLI manifests/checkpoints stay outside this cleanup.
+- Run one Studio server process. Project revisions protect concurrent browser tabs; multiple server workers would need an interprocess write lock.
+
+</details>
+
+<details>
+<summary>Analysis and transcript caching</summary>
+
+Studio reuses saved video details and transcripts across analysis and export jobs for up to 24 hours. Source URL, caption/transcription language, subtitle source, Whisper model/compute mode, and download authentication settings separate saved entries. Empty or damaged entries are recomputed.
+
+Requests for video details and captions run together when no saved result exists. Unchanged worker status does not trigger another history write. Reusing those results preserves encoding quality and exact clip boundaries.
+
+</details>
+
+## Troubleshooting
+
+| If you see | Try this |
+| --- | --- |
+| Missing tools or an environment error | Run `doctor`, fix the reported dependency, then rerun the launcher |
+| Missing or rejected Gemini key | Run `setup`; `doctor live` makes an explicit live API check |
+| YouTube authentication or access errors | Configure one cookie method in `.env`, then run `doctor youtube <URL>` |
+| Slow CPU exports | Choose a lighter quality/preset in setup; use **Quick preview** to check an edit first |
+| A project that cannot export | Confirm its source still exists and reanalyze if caption timing changed |
+
+## Development
 
 ```bash
-# Verify your installation & dependencies
-./main.sh doctor
-
-# Preview what will be processed without downloading or rendering
-./main.sh preview
-
-# Fetch winning channel videos, extract highlights, and render clips
-./main.sh make
-
-# Inspect generated clips in your file explorer
-./main.sh open
-
-# Post queued clips safely to Instagram (optional)
-./main.sh post
-```
-
-*(On Windows, replace `./main.sh` with `.\main.ps1`)*
-
----
-
-## 🎨 Subtitle Styles
-
-Hooky includes high-converting subtitle templates inspired by top creators:
-
-| Style | Description | Preview / Font |
-|---|---|---|
-| `titanium` / `gold` | **Quiet Luxury**: Warm titanium metallic glow, elegant editorial typography | Montserrat Bold |
-| `hormozi` | **Viral Hook Style**: Bold font, uppercase, dynamic bright color highlights on spoken words | Montserrat Bold |
-| `clean` | **Modern Minimalist**: Subtle background box, legible, professional podcast aesthetic | Arial |
-| `yellow` | **High-Contrast Attention**: Vibrant yellow word highlights for maximum retention | Montserrat Bold |
-| `minimal` | **Cinematic Italic**: Clean underline without background boxes | Georgia |
-| `emerald` | **Code & Tech**: High-tech matrix emerald green glow | Consolas |
-| `crimson` | **Bold Shock**: Punchy crimson neon drop-shadow | Montserrat Bold |
-
-List all available styles:
-```bash
-./main.sh styles
-```
-
----
-
-## 🛠️ CLI Command Reference
-
-| Command | Action |
-|---|---|
-| `./main.sh web` (or `./main.sh`) | Launch visual Web Studio and Control Portal in your browser (`http://127.0.0.1:8000`) |
-| `./main.sh make` | Scan channels, add winners to `links.txt`, and render all clips |
-| `./main.sh preview` | Dry-run: view pending jobs and highlights without touching files |
-| `./main.sh post` | Drain the Instagram queue with safety cooldown intervals |
-| `./main.sh status` | Show current queue state, render progress, and recent errors |
-| `./main.sh retry` | Re-attempt failed links or rendering tasks |
-| `./main.sh cleanup` | Preview and safely remove raw source files after posting |
-| `./main.sh parts <file>` | Split long videos into sequential episodes/parts |
-| `./main.sh doctor` | Diagnostic health check (FFmpeg, Gemini key, yt-dlp, cookies) |
-| `./main.sh doctor youtube` | Verify YouTube cookies and test bypass on age-gated videos |
-
----
-
-## ⚙️ Configuration (`.env`)
-
-The setup wizard generates `.env`. You can fine-tune settings anytime:
-
-```dotenv
-# --- AI Engine ---
-GEMINI_API_KEY=AIzaSy...               # Required for highlight extraction
-GEMINI_MODEL=gemini-3.8-flash           # Current default model
-
-# --- Subtitles & Whisper ---
-WHISPER_MODEL=tiny                     # Default; larger installed models are optional
-WHISPER_COMPUTE=int8                   # int8, float16 (for GPU CUDA)
-SUB_STYLE=hormozi                      # Default; list presets with ./main.sh styles
-
-# --- Video Quality & Encoding ---
-QUALITY=highest                        # highest, high, low
-X264_PRESET=medium                     # ultrafast, veryfast, medium, slow
-FFMPEG_THREADS=2
-
-# --- Channel Discovery ---
-CHANNEL_BACKLOG_MAX=20                 # Default pending source budget
-CHANNEL_SCAN_MAX=0                     # Default: inspect all available videos
-
-# --- Instagram Automation (Optional) ---
-IG_USERNAME=your_account
-IG_PASSWORD=your_password
-QUEUE_MIN_GAP_MINUTES=60               # Default minimum between scheduled posts
-QUEUE_MAX_GAP_MINUTES=120              # Default maximum gap between scheduled posts
-POST_HOURS=17-0                        # Default local schedule: 5 PM to midnight
-
-# --- YouTube Auth / Cookies (Optional for 403 bypass) ---
-YTDLP_COOKIES_FROM_BROWSER=chrome      # chrome, firefox, edge, or brave
-# or
-YTDLP_COOKIES_FILE=/path/to/cookies.txt
-```
-
----
-
-## 🧩 Split Full Videos into "Part 1, Part 2..."
-
-Need to split a long masterclass or movie clip into sequential parts?
-
-```bash
-# Auto-split into clean numbered 60s segments with part badges
-./main.sh parts interview.mp4 --part-seconds 60
-```
-
----
-
-## 🧪 Testing & Code Quality
-
-The offline test suite covers pipeline logic, file safety, settings, and Studio process cleanup. CI runs on Ubuntu and Windows:
-
-```bash
-# Sync dependencies
-uv sync --extra all --extra dev
-
-# Run test suite
+uv sync --locked --extra all --extra dev
 uv run pytest
 ```
 
----
+The offline suite covers pipeline logic, settings, file safety, and Studio process cleanup with temporary state and mocked services. CI runs on Ubuntu and Windows.
 
-## 🤝 Contributing
+Optional local-media checks: `uv run pytest --run-integration`. Enable the Studio synthetic media smoke with `HOOKY_MEDIA_SMOKE=1` (PowerShell: `$env:HOOKY_MEDIA_SMOKE='1'`). These checks use FFmpeg/FFprobe and do not call YouTube, Gemini, or Instagram. Browser workflows live in the [sibling website repository](https://github.com/pranav256/Hooky-website); its README explains the isolated hosts and paired CI revisions.
 
-Contributions, feature requests, and bug reports are welcome!
-1. Fork the Project
-2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your Changes (`git commit -m 'feat: Add AmazingFeature'`)
-4. Push to the Branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+## Contributing
 
----
+Found a rough edge or have a useful improvement? Open an issue with the command, expected result, and relevant logs with credentials removed. For a pull request, keep the change focused and include the smallest check that demonstrates it works.
 
-## 📄 License
+## License
 
-Distributed under the MIT License. See [LICENSE](LICENSE) for more information.
-
----
-
-<p align="center">
-  <sub>Built for content creators who value speed, quality, and complete ownership of their pipeline.</sub>
-</p>
+[MIT](LICENSE). Make something worth watching.

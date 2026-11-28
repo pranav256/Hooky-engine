@@ -38,7 +38,7 @@ def test_noninteractive_setup_selects_profile_and_writes_only_requested_file(
     assert saved["HOOKY_PROFILE"] == "low"
     assert saved["QUALITY"] == "low"
     assert saved["WHISPER_MODEL"] == "tiny"
-    assert env_path.parent == tmp_path
+    assert list(tmp_path.iterdir()) == [env_path]
     assert "Saved Hooky configuration" in capsys.readouterr().out
 
 

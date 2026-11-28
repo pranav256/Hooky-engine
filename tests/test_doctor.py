@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from unittest.mock import Mock
+
+import pytest
 
 from hooky import cli
 from hooky import doctor
@@ -52,8 +55,8 @@ def test_doctor_invalid_local_auth_skips_network_probe(monkeypatch, capsys) -> N
     assert "synthetic invalid configuration" in output
 
 
-def test_doctor_passes_a_synthetic_url_to_the_mocked_probe(monkeypatch, capsys) -> None:
-    seen: list[str] = []
+@pytest.mark.parametrize("accessible,exit_code", [(True, 0), (False, 2)])
+def test_doctor_returns_exit_status_from_the_mocked_probe(monkeypatch, capsys, accessible, exit_code) -> None:
     monkeypatch.setattr(
         downloader,
         "youtube_auth_status",
@@ -64,19 +67,16 @@ def test_doctor_passes_a_synthetic_url_to_the_mocked_probe(monkeypatch, capsys) 
         },
     )
 
-    def fake_probe(url: str) -> bool:
-        seen.append(url)
-        return True
+    probe = Mock(return_value=accessible)
+    monkeypatch.setattr(downloader, "check_youtube_access", probe)
 
-    monkeypatch.setattr(downloader, "check_youtube_access", fake_probe)
-
-    assert cli._doctor(["youtube", "offline://video"]) is True
-    assert seen == ["offline://video"]
+    assert cli._doctor(["youtube", "offline://video"]) == exit_code
+    probe.assert_called_once_with("offline://video")
     assert "synthetic browser metadata only" in capsys.readouterr().out
 
 
 def test_auth_status_validates_metadata_without_reading_cookie_contents(
-    tmp_path, monkeypatch
+    tmp_path
 ) -> None:
     cookie_file = tmp_path / "synthetic-cookies.txt"
     cookie_file.write_text("synthetic placeholder; not a credential\n", encoding="utf-8")

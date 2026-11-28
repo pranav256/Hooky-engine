@@ -208,7 +208,7 @@ def test_maker_can_enqueue_during_upload_without_losing_history(tmp_path, monkey
     assert post_queue.is_pending(later, fresh)
 
 
-def test_concurrent_poster_and_review_actions_are_refused(tmp_path, monkeypatch):
+def test_concurrent_poster_and_review_actions_are_refused(tmp_path):
     clips, state = queued(tmp_path)
     post_queue.begin_upload(clips[0], state)
     with post_queue.poster_lock(state):
@@ -239,7 +239,7 @@ def test_explicit_review_cli_never_posts_by_itself(tmp_path):
     assert clips[0].exists()
 
 
-def test_corrupt_cli_queue_returns_error_without_reset(tmp_path):
+def test_corrupt_cli_queue_returns_error_without_reset():
     qpath = post_queue.queue_path()
     qpath.parent.mkdir()
     qpath.write_text("corrupt")

@@ -12,22 +12,21 @@ import platform
 import re
 import shutil
 import subprocess
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 
 
 @dataclass(frozen=True)
 class ToolInfo:
-    """Availability and version information for one local command."""
+    """Availability and local path for one command."""
 
     available: bool
     path: str | None = None
-    version: str | None = None
 
 
 @dataclass(frozen=True)
 class SystemProfile:
-    """A JSON-safe snapshot of the hardware/software relevant to Hooky."""
+    """Hardware and software capabilities relevant to Hooky."""
 
     os_name: str
     distro: str
@@ -45,14 +44,6 @@ class SystemProfile:
         if self.ram_bytes is None:
             return None
         return round(self.ram_bytes / (1024 ** 3), 1)
-
-    def to_dict(self) -> dict[str, object]:
-        """Return a JSON-safe representation for diagnostics and callers."""
-        value = asdict(self)
-        value["gpu_hints"] = list(self.gpu_hints)
-        value["hardware_acceleration"] = list(self.hardware_acceleration)
-        value["ram_gb"] = self.ram_gb
-        return value
 
 
 def _run(command: list[str], timeout: float = 2.0) -> str:
@@ -75,13 +66,7 @@ def _run(command: list[str], timeout: float = 2.0) -> str:
 
 def _tool_info(name: str) -> ToolInfo:
     path = shutil.which(name)
-    if not path:
-        return ToolInfo(False)
-    output = _run([path, "-version"])
-    first_line = next((line.strip() for line in output.splitlines() if line.strip()), "")
-    # Keep the diagnostic compact and avoid exposing arbitrary command output.
-    version = first_line[:180] or None
-    return ToolInfo(True, path, version)
+    return ToolInfo(path is not None, path)
 
 
 def _read_linux_ram() -> int | None:
@@ -257,13 +242,5 @@ def collect_system_profile() -> SystemProfile:
     )
 
 
-# Short aliases make the profiler convenient to consume from scripts.
-profile_system = collect_system_profile
-SystemProfiler = SystemProfile
-
-
-__all__ = [
-    "SystemProfile", "SystemProfiler", "ToolInfo", "collect_system_profile",
-    "profile_system",
-]
+__all__ = ["SystemProfile", "ToolInfo", "collect_system_profile"]
 
