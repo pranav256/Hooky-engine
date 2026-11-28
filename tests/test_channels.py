@@ -524,7 +524,7 @@ def test_concurrent_history_saves_preserve_all_records():
 def test_failed_atomic_history_replace_preserves_original(monkeypatch):
     channels._save_history({"old": {"views": 5}})
     original = channels.SEEN_FILE.read_bytes()
-    monkeypatch.setattr(channels.os, "replace",
+    monkeypatch.setattr(Path, "replace",
                         lambda *args: (_ for _ in ()).throw(OSError("replace failed")))
     with pytest.raises(OSError, match="replace failed"):
         channels._save_history({"new": {"views": 6}})
